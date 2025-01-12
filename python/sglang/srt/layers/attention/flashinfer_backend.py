@@ -619,6 +619,7 @@ class FlashInferIndicesUpdaterDecode:
             1,
             data_type=self.data_type,
             q_data_type=self.q_data_type,
+            non_blocking=True,
         )
 
 
@@ -800,7 +801,9 @@ class FlashInferIndicesUpdaterPrefill:
             kv_indptr[1 : bs + 1] = torch.cumsum(paged_kernel_lens, dim=0)
             kv_indptr = kv_indptr[: bs + 1]
             kv_indices = torch.empty(
-                paged_kernel_lens_sum, dtype=torch.int32, device="cuda"
+                paged_kernel_lens_sum + 256,
+                dtype=torch.int32,
+                device=req_pool_indices.device,
             )
             create_flashinfer_kv_indices_triton[(bs,)](
                 self.req_to_token,
@@ -834,6 +837,7 @@ class FlashInferIndicesUpdaterPrefill:
                 self.num_kv_heads,
                 self.head_dim,
                 q_data_type=self.q_data_type,
+                non_blocking=True,
             )
 
         # cached part
@@ -849,6 +853,7 @@ class FlashInferIndicesUpdaterPrefill:
             1,
             q_data_type=self.q_data_type,
             custom_mask=custom_mask,
+            non_blocking=True,
         )
 
 
