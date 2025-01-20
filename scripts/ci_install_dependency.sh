@@ -10,7 +10,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 bash "${SCRIPT_DIR}/killall_sglang.sh"
 
 pip install --upgrade pip
-pip install -e "python[all]" --find-links https://flashinfer.ai/whl/cu124/torch2.4/flashinfer/
+pip install -e "python[all]"
 
 # Force reinstall flashinfer and torch_memory_saver
 pip install flashinfer==0.2.0.post1 --find-links ${FLASHINFER_REPO} --force-reinstall --no-deps
