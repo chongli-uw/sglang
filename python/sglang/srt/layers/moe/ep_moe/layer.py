@@ -141,12 +141,7 @@ class All2AllEPTokenDispatcher:
         # [ep_size, num_local_experts] -> [num_local_experts]
         self.num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(0)
     
-    def moe_token_scatter(self, hidden_states: torch.Tensor, 
-                          topk_ids: torch.Tensor, 
-                          seg_indptr: torch.Tensor) -> torch.Tensor:
-        num_local_tokens_per_expert = seg_indptr[1:] - seg_indptr[:-1]
-        self.preprocess(num_local_tokens_per_expert)
-
+    def moe_token_scatter(self, hidden_states: torch.Tensor) -> torch.Tensor:
         global_input_tokens = torch.empty((sum(self.output_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
         torch.distributed.all_to_all_single(global_input_tokens, hidden_states, self.output_splits, self.input_splits, self.ep_group)
 
@@ -164,7 +159,6 @@ class All2AllEPTokenDispatcher:
 
         return local_output_tokens
         
-
 class All2AllEPMoE(torch.nn.Module):
     """
     All2All style MoE Expert Parallel Impl
@@ -261,6 +255,8 @@ class All2AllEPMoE(torch.nn.Module):
             topk_ids, self.num_experts
         )
 
+        self.token_dispatcher.preprocess(seg_indptr[1:] - seg_indptr[:-1])
+
         gateup_input = torch.empty(
             (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
             device=hidden_states.device,
@@ -289,13 +285,7 @@ class All2AllEPMoE(torch.nn.Module):
             BLOCK_SIZE=512,
         )
         
-        scattered_input = self.token_dispatcher.moe_token_scatter(
-            gateup_input, 
-            topk_ids, 
-            seg_indptr, 
-            self.start_expert_id,
-            self.end_expert_id + 1 # end_expert_id is inclusive
-        )
+        scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input)
 
         seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 2]
         weight_indices_cur_rank = torch.arange(
