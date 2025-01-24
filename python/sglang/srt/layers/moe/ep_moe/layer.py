@@ -236,7 +236,7 @@ class All2AllEPMoE(torch.nn.Module):
         )
 
         self.grouped_gemm_runner = None
-        self.token_dispatcher = All2AllEPTokenDispatcher()
+        self.token_dispatcher = All2AllEPTokenDispatcher(num_experts, self.tp_size, self.start_expert_id, self.end_expert_id + 1)
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
         assert self.quant_method is not None
