@@ -100,6 +100,21 @@ class All2AllEPTokenDispatcher:
         self.start_expert_id = start_expert_id
         self.end_expert_id = end_expert_id
         self.ep_group = get_ep_group().device_group
+        
+        if self.num_local_experts > 1:
+            input_chunk_idxs = torch.arange(num_experts)
+            self.permute_input_by_local_expert_index = input_chunk_idxs.view(ep_size, self.num_local_experts).t().ravel().tolist()
+            self.restore_output_by_local_experts_index = input_chunk_idxs.view(self.num_local_experts, ep_size).t().ravel().tolist()
+
+    def permute_input_by_local_expert(self, input: torch.Tensor, split_sizes: torch.Tensor) -> torch.Tensor:
+        assert self.num_local_experts > 1, "input permutation is only needed when num_local_experts > 1"
+        input = torch.split(input, split_sizes.tolist(), dim=0)
+        return torch.cat([input[i] for i in self.permute_input_by_local_expert_index], dim=0)
+
+    def restore_output_by_local_experts(self, output: torch.Tensor, split_sizes: torch.Tensor) -> torch.Tensor:
+        assert self.num_local_experts > 1, "output restore is only needed when num_local_experts > 1"
+        output = torch.split(output, split_sizes.tolist(), dim=0)
+        return torch.cat([output[i] for i in self.restore_output_by_local_experts_index], dim=0)
     
     def moe_token_scatter(self, hidden_states: torch.Tensor, 
                           topk_ids: torch.Tensor, 
@@ -115,7 +130,8 @@ class All2AllEPTokenDispatcher:
         torch.distributed.all_gather_into_tensor(num_global_tokens_per_expert, num_local_tokens_per_expert, self.ep_group)
         
         # [ep_size, num_local_experts] -> [ep_size, num_local_experts]
-        num_global_tokens_per_local_expert = num_global_tokens_per_expert[ : , self.start_expert_id : self.end_expert_id]
+        num_global_tokens_per_local_expert = num_global_tokens_per_expert[ : , self.start_expert_id : self.end_expert_id].contiguous()
+        self.num_global_tokens_per_local_expert_cpu = num_global_tokens_per_local_expert.to("cpu", non_blocking=True)
 
         # [ep_size, num_local_experts] -> [ep_size]
         num_global_tokens_per_rank = num_global_tokens_per_local_expert.sum(-1)
@@ -127,6 +143,9 @@ class All2AllEPTokenDispatcher:
         global_input_tokens = torch.empty((sum(output_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
         torch.distributed.all_to_all_single(global_input_tokens, hidden_states, output_splits, input_splits, self.ep_group)
 
+        if self.num_local_experts > 1:
+            global_input_tokens = self.permute_input_by_local_expert(global_input_tokens, self.num_global_tokens_per_local_expert_cpu.ravel())
+
         return global_input_tokens
         
     def moe_token_gather(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -136,6 +155,8 @@ class All2AllEPTokenDispatcher:
 class All2AllEPMoE(torch.nn.Module):
     """
     All2All style MoE Expert Parallel Impl
+
+    NOTE: Currently hybrid EP+TP is not supported.
     """
 
     def __init__(
