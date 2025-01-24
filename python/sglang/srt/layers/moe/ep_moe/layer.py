@@ -196,7 +196,7 @@ class All2AllEPMoE(torch.nn.Module):
         assert self.num_experts % self.tp_size == 0
         self.num_experts_per_partition = self.num_experts // self.tp_size
         self.start_expert_id = self.tp_rank * self.num_experts_per_partition
-        self.end_expert_id = self.start_expert_id + self.num_experts_per_partition - 1
+        self.end_expert_id = self.start_expert_id + self.num_experts_per_partition
 
         self.top_k = top_k
         self.intermediate_size = intermediate_size
@@ -230,7 +230,7 @@ class All2AllEPMoE(torch.nn.Module):
         )
 
         self.grouped_gemm_runner = None
-        self.token_dispatcher = All2AllEPTokenDispatcher(num_experts, self.tp_size, self.start_expert_id, self.end_expert_id + 1)
+        self.token_dispatcher = All2AllEPTokenDispatcher(num_experts, self.tp_size, self.start_expert_id, self.end_expert_id)
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
         assert self.quant_method is not None
@@ -279,7 +279,7 @@ class All2AllEPMoE(torch.nn.Module):
             topk_ids,
             self.w13_input_scale,
             0,
-            self.num_experts - 1,
+            self.num_experts,
             self.top_k,
             hidden_states.shape[1],
             BLOCK_SIZE=512,
@@ -287,7 +287,7 @@ class All2AllEPMoE(torch.nn.Module):
         
         scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input)
 
-        seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 2]
+        seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 1]
         weight_indices_cur_rank = torch.arange(
             0,
             self.num_experts_per_partition,
@@ -333,8 +333,8 @@ class All2AllEPMoE(torch.nn.Module):
             gateup_output.shape[1],
             reorder_topk_ids,
             self.w2_input_scale,
-            self.start_expert_id,
-            self.end_expert_id,
+            0,
+            self.num_experts,
             BLOCK_SIZE=512,
         )
 
@@ -368,8 +368,8 @@ class All2AllEPMoE(torch.nn.Module):
             src2dst,
             topk_ids,
             topk_weights,
-            self.start_expert_id,
-            self.end_expert_id,
+            0,
+            self.num_experts,
             self.top_k,
             hidden_states.size(1),
             BLOCK_SIZE=512,
@@ -413,7 +413,7 @@ class All2AllEPMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
-        if expert_id < self.start_expert_id or expert_id > self.end_expert_id:
+        if expert_id < self.start_expert_id or expert_id >= self.end_expert_id:
             return
         expert_id = expert_id - self.start_expert_id
 
@@ -512,7 +512,7 @@ class EPMoE(torch.nn.Module):
         assert self.num_experts % self.tp_size == 0
         self.num_experts_per_partition = self.num_experts // self.tp_size
         self.start_expert_id = self.tp_rank * self.num_experts_per_partition
-        self.end_expert_id = self.start_expert_id + self.num_experts_per_partition - 1
+        self.end_expert_id = self.start_expert_id + self.num_experts_per_partition
 
         self.top_k = top_k
         self.intermediate_size = intermediate_size
@@ -601,7 +601,7 @@ class EPMoE(torch.nn.Module):
             BLOCK_SIZE=512,
         )
 
-        seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 2]
+        seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 1]
         weight_indices_cur_rank = torch.arange(
             0,
             self.num_experts_per_partition,
@@ -728,7 +728,7 @@ class EPMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
-        if expert_id < self.start_expert_id or expert_id > self.end_expert_id:
+        if expert_id < self.start_expert_id or expert_id >= self.end_expert_id:
             return
         expert_id = expert_id - self.start_expert_id
 
