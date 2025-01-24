@@ -100,6 +100,10 @@ class All2AllEPTokenDispatcher:
         self.start_expert_id = start_expert_id
         self.end_expert_id = end_expert_id
         self.ep_group = get_ep_group().device_group
+
+        self.input_splits: torch.Tensor = None
+        self.output_splits: torch.Tensor = None
+        self.num_global_tokens_per_local_expert_cpu: torch.Tensor = None
         
         if self.num_local_experts > 1:
             input_chunk_idxs = torch.arange(num_experts)
@@ -115,13 +119,10 @@ class All2AllEPTokenDispatcher:
         assert self.num_local_experts > 1, "output restore is only needed when num_local_experts > 1"
         output = torch.split(output, split_sizes.tolist(), dim=0)
         return torch.cat([output[i] for i in self.restore_output_by_local_experts_index], dim=0)
-    
-    def moe_token_scatter(self, hidden_states: torch.Tensor, 
-                          topk_ids: torch.Tensor, 
-                          seg_indptr: torch.Tensor) -> torch.Tensor:
-        num_local_tokens_per_expert = seg_indptr[1:] - seg_indptr[:-1]
 
-        input_splits = num_local_tokens_per_expert.view(self.ep_size, self.num_local_experts).sum(-1).to("cpu", non_blocking=True).numpy()
+    def preprocess(self, num_local_tokens_per_expert: torch.Tensor):
+
+        self.input_splits = num_local_tokens_per_expert.view(self.ep_size, self.num_local_experts).sum(-1).to("cpu", non_blocking=True).numpy()
 
         # [ep_size, num_global_experts]
         num_global_tokens_per_expert = torch.zeros((self.ep_size, self.num_global_experts), dtype=num_local_tokens_per_expert.dtype, device=num_local_tokens_per_expert.device)
@@ -135,13 +136,19 @@ class All2AllEPTokenDispatcher:
 
         # [ep_size, num_local_experts] -> [ep_size]
         num_global_tokens_per_rank = num_global_tokens_per_local_expert.sum(-1)
-        output_splits = num_global_tokens_per_rank.to("cpu", non_blocking=True).numpy()
+        self.output_splits = num_global_tokens_per_rank.to("cpu", non_blocking=True).numpy()
 
         # [ep_size, num_local_experts] -> [num_local_experts]
         self.num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(0)
+    
+    def moe_token_scatter(self, hidden_states: torch.Tensor, 
+                          topk_ids: torch.Tensor, 
+                          seg_indptr: torch.Tensor) -> torch.Tensor:
+        num_local_tokens_per_expert = seg_indptr[1:] - seg_indptr[:-1]
+        self.preprocess(num_local_tokens_per_expert)
 
-        global_input_tokens = torch.empty((sum(output_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
-        torch.distributed.all_to_all_single(global_input_tokens, hidden_states, output_splits, input_splits, self.ep_group)
+        global_input_tokens = torch.empty((sum(self.output_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
+        torch.distributed.all_to_all_single(global_input_tokens, hidden_states, self.output_splits, self.input_splits, self.ep_group)
 
         if self.num_local_experts > 1:
             global_input_tokens = self.permute_input_by_local_expert(global_input_tokens, self.num_global_tokens_per_local_expert_cpu.ravel())
@@ -149,8 +156,14 @@ class All2AllEPTokenDispatcher:
         return global_input_tokens
         
     def moe_token_gather(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        ...
+        if self.num_local_experts > 1:
+            hidden_states = self.restore_output_by_local_experts(hidden_states, self.num_global_tokens_per_local_expert_cpu.t().ravel())
 
+        local_output_tokens = torch.empty((sum(self.input_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
+        torch.distributed.all_to_all_single(local_output_tokens, hidden_states, self.input_splits, self.output_splits, self.ep_group)
+
+        return local_output_tokens
+        
 
 class All2AllEPMoE(torch.nn.Module):
     """
