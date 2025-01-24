@@ -7,6 +7,7 @@ from vllm import _custom_ops as ops
 
 from sglang.srt.custom_op import CustomOp
 from sglang.srt.distributed import (
+    get_ep_group,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
 )
@@ -92,11 +93,41 @@ class GroupedGemmRunner(torch.nn.Module):
 
 class All2AllEPTokenDispatcher:
     
-    def __init__(self):
-        pass
+    def __init__(self, num_experts: int, ep_size: int, start_expert_id: int, end_expert_id: int):
+        self.num_global_experts = num_experts
+        self.ep_size = ep_size
+        self.num_local_experts = num_experts // ep_size
+        self.start_expert_id = start_expert_id
+        self.end_expert_id = end_expert_id
+        self.ep_group = get_ep_group().device_group
     
-    def moe_token_scatter(self, hidden_states: torch.Tensor, topk_ids: torch.Tensor) -> torch.Tensor:
-        ...
+    def moe_token_scatter(self, hidden_states: torch.Tensor, 
+                          topk_ids: torch.Tensor, 
+                          seg_indptr: torch.Tensor) -> torch.Tensor:
+        num_local_tokens_per_expert = seg_indptr[1:] - seg_indptr[:-1]
+
+        input_splits = num_local_tokens_per_expert.view(self.ep_size, self.num_local_experts).sum(-1).to("cpu", non_blocking=True).numpy()
+
+        # [ep_size, num_global_experts]
+        num_global_tokens_per_expert = torch.zeros((self.ep_size, self.num_global_experts), dtype=num_local_tokens_per_expert.dtype, device=num_local_tokens_per_expert.device)
+        
+        # [num_global_experts] -> [ep_size, num_global_experts]
+        torch.distributed.all_gather_into_tensor(num_global_tokens_per_expert, num_local_tokens_per_expert, self.ep_group)
+        
+        # [ep_size, num_local_experts] -> [ep_size, num_local_experts]
+        num_global_tokens_per_local_expert = num_global_tokens_per_expert[ : , self.start_expert_id : self.end_expert_id]
+
+        # [ep_size, num_local_experts] -> [ep_size]
+        num_global_tokens_per_rank = num_global_tokens_per_local_expert.sum(-1)
+        output_splits = num_global_tokens_per_rank.to("cpu", non_blocking=True).numpy()
+
+        # [ep_size, num_local_experts] -> [num_local_experts]
+        self.num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(0)
+
+        global_input_tokens = torch.empty((sum(output_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
+        torch.distributed.all_to_all_single(global_input_tokens, hidden_states, output_splits, input_splits, self.ep_group)
+
+        return global_input_tokens
         
     def moe_token_gather(self, hidden_states: torch.Tensor) -> torch.Tensor:
         ...
@@ -104,7 +135,7 @@ class All2AllEPTokenDispatcher:
 
 class All2AllEPMoE(torch.nn.Module):
     """
-    MoE Expert Parallel Impl
+    All2All style MoE Expert Parallel Impl
     """
 
     def __init__(
@@ -224,7 +255,13 @@ class All2AllEPMoE(torch.nn.Module):
             BLOCK_SIZE=512,
         )
         
-        scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input, topk_ids)
+        scattered_input = self.token_dispatcher.moe_token_scatter(
+            gateup_input, 
+            topk_ids, 
+            seg_indptr, 
+            self.start_expert_id,
+            self.end_expert_id + 1 # end_expert_id is inclusive
+        )
 
         seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 2]
         weight_indices_cur_rank = torch.arange(
