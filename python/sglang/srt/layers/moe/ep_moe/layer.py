@@ -153,6 +153,7 @@ class All2AllEPTokenDispatcher:
     # GPU1: experts 2, 3  token to experts: 2, 3, 2, 2, 3 <-> 2, 2, 2, 3, 3
     
     def moe_token_scatter(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        torch.cuda.synchronize()
         global_input_tokens = torch.empty((sum(self.output_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
         torch.distributed.all_to_all_single(global_input_tokens, hidden_states, self.output_splits, self.input_splits, self.ep_group)
 
@@ -299,7 +300,8 @@ class All2AllEPMoE(torch.nn.Module):
         
         scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input)
 
-        seg_indptr_cur_rank = self.token_dispatcher.num_tokens_per_local_expert
+        seg_indptr_cur_rank = torch.cat([torch.zeros((1, ), dtype=seg_indptr.dtype, device=seg_indptr.device), 
+                                         self.token_dispatcher.num_tokens_per_local_expert], dim=0) 
         
         weight_indices_cur_rank = torch.arange(
             0,
@@ -340,16 +342,19 @@ class All2AllEPMoE(torch.nn.Module):
                 dtype=torch.float32,
                 device=hidden_states.device,
             )
+
         silu_and_mul_triton_kernel[(gateup_output.shape[0],)](
             gateup_output,
             down_input,
             gateup_output.shape[1],
-            reorder_topk_ids,
+            torch.zeros((gateup_output.shape[0], ), dtype=torch.int64, device=gateup_output.device),
             self.w2_input_scale,
             0,
             self.num_experts,
             BLOCK_SIZE=512,
         )
+
+        # down_input = self.act_fn(gateup_output)
 
         # GroupGemm-1
         down_output = torch.empty(
