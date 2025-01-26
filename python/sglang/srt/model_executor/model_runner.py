@@ -175,6 +175,7 @@ class ModelRunner:
                 "enable_nan_detection": server_args.enable_nan_detection,
                 "enable_dp_attention": server_args.enable_dp_attention,
                 "enable_ep_moe": server_args.enable_ep_moe,
+                "enable_all2all_ep": server_args.enable_all2all_ep,
                 "device": server_args.device,
                 "enable_flashinfer_mla": server_args.enable_flashinfer_mla,
             }
