@@ -594,6 +594,7 @@ class ModelRunner:
             )
 
         self.max_total_num_tokens = self.profile_max_num_token(total_gpu_memory)
+        self.max_total_num_tokens = int(self.max_total_num_tokens * 0.8)
 
         if max_num_reqs is None:
             max_num_reqs = min(

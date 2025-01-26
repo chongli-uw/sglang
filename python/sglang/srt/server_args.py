@@ -836,6 +836,11 @@ class ServerArgs:
             help="Enabling expert parallelism for moe. The ep size is equal to the tp size.",
         )
         parser.add_argument(
+            "--enable-all2all-ep",
+            action="store_true",
+            help="Enabling all2all communication for expert parallelism. The ep size is equal to the tp size.",
+        )
+        parser.add_argument(
             "--enable-torch-compile",
             action="store_true",
             help="Optimize the model with torch.compile. Experimental feature.",
