@@ -7,10 +7,12 @@ from vllm import _custom_ops as ops
 
 from sglang.srt.custom_op import CustomOp
 from sglang.srt.distributed import (
-    get_ep_group,
+    get_tp_group,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
 )
+from sglang.srt.layers.activation import SiluAndMul
+from sglang.srt.layers.custom_op_util import register_custom_op
 from sglang.srt.layers.moe.ep_moe.kernels import (
     grouped_gemm_triton,
     post_reorder_triton_kernel,
@@ -28,7 +30,6 @@ from sglang.srt.layers.quantization.fp8 import Fp8Config, Fp8MoEMethod
 from sglang.srt.utils import is_hip, set_weight_attrs
 
 logger = logging.getLogger(__name__)
-
 
 class GroupedGemmRunner(torch.nn.Module):
     flashinfer_gemm_warpper = None
@@ -99,11 +100,12 @@ class All2AllEPTokenDispatcher:
         self.num_local_experts = num_experts // ep_size
         self.start_expert_id = start_expert_id
         self.end_expert_id = end_expert_id
-        self.ep_group = get_ep_group().device_group
+        self.ep_group = get_tp_group().device_group
 
         self.input_splits: torch.Tensor = None
         self.output_splits: torch.Tensor = None
         self.num_global_tokens_per_local_expert_cpu: torch.Tensor = None
+        self.num_tokens_per_local_expert: torch.Tensor = None
         
         if self.num_local_experts > 1:
             input_chunk_idxs = torch.arange(num_experts)
@@ -122,6 +124,8 @@ class All2AllEPTokenDispatcher:
 
     def preprocess(self, num_local_tokens_per_expert: torch.Tensor):
 
+        # num_local_tokens_per_expert: [num_global_experts]
+        # ep_size * num_local_experts == num_global_experts
         self.input_splits = num_local_tokens_per_expert.view(self.ep_size, self.num_local_experts).sum(-1).to("cpu", non_blocking=True).numpy()
 
         # [ep_size, num_global_experts]
@@ -130,7 +134,7 @@ class All2AllEPTokenDispatcher:
         # [num_global_experts] -> [ep_size, num_global_experts]
         torch.distributed.all_gather_into_tensor(num_global_tokens_per_expert, num_local_tokens_per_expert, self.ep_group)
         
-        # [ep_size, num_local_experts] -> [ep_size, num_local_experts]
+        # [ep_size, num_global_experts] -> [ep_size, num_local_experts]
         num_global_tokens_per_local_expert = num_global_tokens_per_expert[ : , self.start_expert_id : self.end_expert_id].contiguous()
         self.num_global_tokens_per_local_expert_cpu = num_global_tokens_per_local_expert.to("cpu", non_blocking=True)
 
@@ -140,6 +144,13 @@ class All2AllEPTokenDispatcher:
 
         # [ep_size, num_local_experts] -> [num_local_experts]
         self.num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(0)
+    
+    # num local experts: 2
+    # GPU0: experts 0, 1  token to experts: 0, 0, 1, 2, 3
+    # GPU1: experts 2, 3  token to experts: 0, 1, 1, 2, 2, 3
+    # after all2all:
+    # GPU0: experts 0, 1  token to experts: 0, 0, 1, 0, 1, 1 <-> 0, 0, 0, 1, 1, 1
+    # GPU1: experts 2, 3  token to experts: 2, 3, 2, 2, 3 <-> 2, 2, 2, 3, 3
     
     def moe_token_scatter(self, hidden_states: torch.Tensor) -> torch.Tensor:
         global_input_tokens = torch.empty((sum(self.output_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
@@ -230,6 +241,7 @@ class All2AllEPMoE(torch.nn.Module):
         )
 
         self.grouped_gemm_runner = None
+        self.act_fn = SiluAndMul()
         self.token_dispatcher = All2AllEPTokenDispatcher(num_experts, self.tp_size, self.start_expert_id, self.end_expert_id)
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
@@ -287,7 +299,8 @@ class All2AllEPMoE(torch.nn.Module):
         
         scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input)
 
-        seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 1]
+        seg_indptr_cur_rank = self.token_dispatcher.num_tokens_per_local_expert
+        
         weight_indices_cur_rank = torch.arange(
             0,
             self.num_experts_per_partition,
