@@ -279,7 +279,7 @@ class All2AllEPMoE(torch.nn.Module):
         if self.activation_scheme == "dynamic":
             max_value = (
                 torch.max(hidden_states)
-                .repeat(self.num_experts_per_partition)
+                .repeat(self.num_experts)
                 .to(torch.float32)
             )
             self.w13_input_scale = max_value / torch.finfo(self.fp8_dtype).max
@@ -290,7 +290,7 @@ class All2AllEPMoE(torch.nn.Module):
             gateup_input,
             src2dst,
             topk_ids,
-            self.w13_input_scale,
+            None, # self.w13_input_scale results in nan, None reults in incorrect outputs
             0,
             self.num_experts,
             self.top_k,
