@@ -240,6 +240,7 @@ class All2AllEPMoE(torch.nn.Module):
             params_dtype=params_dtype,
             weight_loader=self.weight_loader,
         )
+        self.w13_input_scale = torch.nn.Parameter(torch.ones(self.num_experts, dtype=torch.float32), requires_grad=False)
 
         self.grouped_gemm_runner = None
         self.act_fn = SiluAndMul()
@@ -290,7 +291,7 @@ class All2AllEPMoE(torch.nn.Module):
             gateup_input,
             src2dst,
             topk_ids,
-            None, # self.w13_input_scale results in nan, None reults in incorrect outputs
+            self.w13_input_scale,
             0,
             self.num_experts,
             self.top_k,
@@ -301,7 +302,7 @@ class All2AllEPMoE(torch.nn.Module):
         scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input)
 
         seg_indptr_cur_rank = torch.cat([torch.zeros((1, ), dtype=seg_indptr.dtype, device=seg_indptr.device), 
-                                         self.token_dispatcher.num_tokens_per_local_expert], dim=0) 
+                                         torch.cumsum(self.token_dispatcher.num_tokens_per_local_expert, dim=0)], dim=0) 
         
         weight_indices_cur_rank = torch.arange(
             0,
