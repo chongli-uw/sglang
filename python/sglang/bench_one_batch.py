@@ -238,6 +238,16 @@ def extend(reqs, model_runner):
         enable_custom_logit_processor=False,
     )
     batch.prepare_for_extend()
+
+    if model_runner.server_args.enable_dp_attention:
+        # Need to call prepare_dp_attn_batch(), but there is no Scheduler in batch_one_batch.
+        # Modified from prepare_dp_attn_batch().
+        # In extend(), thus in extend mode.
+        num_tokens = batch.extend_num_tokens
+
+        batch.global_num_tokens = [num_tokens] * model_runner.server_args.dp_size
+        batch.can_run_dp_cuda_graph = True
+
     model_worker_batch = batch.get_model_worker_batch()
     forward_batch = ForwardBatch.init_new(model_worker_batch, model_runner)
     logits_output = model_runner.forward(forward_batch)
@@ -249,6 +259,16 @@ def extend(reqs, model_runner):
 def decode(input_token_ids, batch, model_runner):
     batch.output_ids = input_token_ids
     batch.prepare_for_decode()
+
+    if model_runner.server_args.enable_dp_attention:
+        # Need to call prepare_dp_attn_batch(), but there is no Scheduler in batch_one_batch.
+        # Modified from prepare_dp_attn_batch().
+        # In decode(), batch.forward_mode.is_decode() is True.
+        num_tokens = batch.batch_size()
+
+        batch.global_num_tokens = [num_tokens] * model_runner.server_args.dp_size
+        batch.can_run_dp_cuda_graph = True
+
     model_worker_batch = batch.get_model_worker_batch()
     forward_batch = ForwardBatch.init_new(model_worker_batch, model_runner)
     logits_output = model_runner.forward(forward_batch)
