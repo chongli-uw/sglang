@@ -1,4 +1,6 @@
+import multiprocessing
 import os
+import sys
 from pathlib import Path
 
 import torch
@@ -8,14 +10,8 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 root = Path(__file__).parent.resolve()
 
 
-def _update_wheel_platform_tag():
-    wheel_dir = Path("dist")
-    if wheel_dir.exists() and wheel_dir.is_dir():
-        old_wheel = next(wheel_dir.glob("*.whl"))
-        new_wheel = wheel_dir / old_wheel.name.replace(
-            "linux_x86_64", "manylinux2014_x86_64"
-        )
-        old_wheel.rename(new_wheel)
+if "bdist_wheel" in sys.argv and "--plat-name" not in sys.argv:
+    sys.argv.extend(["--plat-name", "manylinux2014_x86_64"])
 
 
 def _get_cuda_version():
@@ -70,6 +66,8 @@ nvcc_flags = [
     "-std=c++17",
     "-use_fast_math",
     "-DFLASHINFER_ENABLE_F16",
+    "-Xcompiler=-Wconversion",
+    "-Xcompiler=-fno-strict-aliasing",
 ]
 nvcc_flags_fp8 = [
     "-DFLASHINFER_ENABLE_FP8",
@@ -85,13 +83,13 @@ sources = [
     "src/sgl-kernel/csrc/int8_gemm_kernel.cu",
     "src/sgl-kernel/csrc/fp8_gemm_kernel.cu",
     "src/sgl-kernel/csrc/lightning_attention_decode_kernel.cu",
-    "src/sgl-kernel/csrc/rotary_embedding.cu",
+    "src/sgl-kernel/csrc/fused_add_rms_norm_kernel.cu",
     "3rdparty/flashinfer/csrc/activation.cu",
     "3rdparty/flashinfer/csrc/bmm_fp8.cu",
-    "3rdparty/flashinfer/csrc/group_gemm.cu",
     "3rdparty/flashinfer/csrc/norm.cu",
     "3rdparty/flashinfer/csrc/sampling.cu",
     "3rdparty/flashinfer/csrc/renorm.cu",
+    "3rdparty/flashinfer/csrc/rope.cu",
 ]
 
 enable_bf16 = os.getenv("SGL_KERNEL_ENABLE_BF16", "0") == "1"
@@ -103,7 +101,6 @@ sm_version = _get_device_sm()
 if torch.cuda.is_available():
     if cuda_version >= (12, 0) and sm_version >= 90:
         nvcc_flags.append("-gencode=arch=compute_90a,code=sm_90a")
-        sources.append("3rdparty/flashinfer/csrc/group_gemm_sm90.cu")
     if sm_version >= 90:
         nvcc_flags.extend(nvcc_flags_fp8)
     if sm_version >= 80:
@@ -112,7 +109,6 @@ else:
     # compilation environment without GPU
     if enable_sm90a:
         nvcc_flags.append("-gencode=arch=compute_90a,code=sm_90a")
-        sources.append("3rdparty/flashinfer/csrc/group_gemm_sm90.cu")
     if enable_fp8:
         nvcc_flags.extend(nvcc_flags_fp8)
     if enable_bf16:
@@ -154,8 +150,10 @@ setup(
     packages=find_packages(),
     package_dir={"": "src"},
     ext_modules=ext_modules,
-    cmdclass={"build_ext": BuildExtension},
+    cmdclass={
+        "build_ext": BuildExtension.with_options(
+            use_ninja=True, max_jobs=multiprocessing.cpu_count()
+        )
+    },
     options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )
-
-_update_wheel_platform_tag()
