@@ -253,51 +253,55 @@ class All2AllEPMoE(torch.nn.Module):
                 hidden_states.device, use_flashinfer=False  # TODO: use flashinfer
             )
             
-        topk_weights, topk_ids = select_experts(
-            hidden_states=hidden_states,
-            router_logits=router_logits,
-            top_k=self.top_k,
-            use_grouped_topk=self.use_grouped_topk,
-            renormalize=self.renormalize,
-            topk_group=self.topk_group,
-            num_expert_group=self.num_expert_group,
-            correction_bias=self.correction_bias,
-        )
-    
-        reorder_topk_ids, src2dst, seg_indptr = run_moe_ep_preproess(
-            topk_ids, self.num_experts
-        )
-
-        self.token_dispatcher.preprocess(seg_indptr[1:] - seg_indptr[:-1])
-
-        gateup_input = torch.empty(
-            (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
-            device=hidden_states.device,
-            dtype=self.fp8_dtype if self.use_fp8_w8a8 else hidden_states.dtype,
-        )
-        
-        if self.activation_scheme == "dynamic":
-            max_value = (
-                torch.max(hidden_states)
-                .repeat(self.num_experts)
-                .to(torch.float32)
+        not_empty_inputs: bool = hidden_states.numel() > 0
+            
+        if not_empty_inputs:
+            topk_weights, topk_ids = select_experts(
+                hidden_states=hidden_states,
+                router_logits=router_logits,
+                top_k=self.top_k,
+                use_grouped_topk=self.use_grouped_topk,
+                renormalize=self.renormalize,
+                topk_group=self.topk_group,
+                num_expert_group=self.num_expert_group,
+                correction_bias=self.correction_bias,
             )
-            self.w13_input_scale = max_value / torch.finfo(self.fp8_dtype).max
+    
+            reorder_topk_ids, src2dst, seg_indptr = run_moe_ep_preproess(
+                topk_ids, self.num_experts
+            )
+            gateup_input = torch.empty(
+                (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
+                device=hidden_states.device,
+                dtype=self.fp8_dtype if self.use_fp8_w8a8 else hidden_states.dtype,
+            )
+            
+            if self.activation_scheme == "dynamic":
+                max_value = (
+                    torch.max(hidden_states)
+                    .repeat(self.num_experts)
+                    .to(torch.float32)
+                )
+                self.w13_input_scale = max_value / torch.finfo(self.fp8_dtype).max
 
-        # PreReorder
-        pre_reorder_triton_kernel[(hidden_states.shape[0],)](
-            hidden_states,
-            gateup_input,
-            src2dst,
-            topk_ids,
-            self.w13_input_scale,
-            0,
-            self.num_experts,
-            self.top_k,
-            hidden_states.shape[1],
-            BLOCK_SIZE=512,
-        )
-        
+            # PreReorder
+            pre_reorder_triton_kernel[(hidden_states.shape[0],)](
+                hidden_states,
+                gateup_input,
+                src2dst,
+                topk_ids,
+                self.w13_input_scale,
+                0,
+                self.num_experts,
+                self.top_k,
+                hidden_states.shape[1],
+                BLOCK_SIZE=512,
+            )
+            num_local_tokens_per_expert = seg_indptr[1:] - seg_indptr[:-1]
+        else:
+            num_local_tokens_per_expert = torch.zeros(self.num_experts_per_partition, device=hidden_states.device, dtype=torch.int64)
+
+        self.token_dispatcher.preprocess(num_local_tokens_per_expert)
         scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input)
 
         seg_indptr_cur_rank = torch.cat([torch.zeros((1, ), dtype=seg_indptr.dtype, device=seg_indptr.device), 
@@ -380,18 +384,20 @@ class All2AllEPMoE(torch.nn.Module):
 
         # PostReorder
         output = torch.empty_like(hidden_states)
-        post_reorder_triton_kernel[(hidden_states.size(0),)](
-            gathered_output,
-            output,
-            src2dst,
-            topk_ids,
-            topk_weights,
-            0,
-            self.num_experts,
-            self.top_k,
-            hidden_states.size(1),
-            BLOCK_SIZE=512,
-        )
+        if not_empty_inputs:
+            post_reorder_triton_kernel[(hidden_states.size(0),)](
+                gathered_output,
+                output,
+                src2dst,
+                topk_ids,
+                topk_weights,
+                0,
+                self.num_experts,
+                self.top_k,
+                hidden_states.size(1),
+                BLOCK_SIZE=512,
+            )
+            
         return output
 
     @classmethod
