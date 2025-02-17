@@ -337,6 +337,7 @@ def latency_test_run_once(
     profile,
     profile_filename_prefix,
 ):
+    print(f"latency test: batch_size, input_len, output_len ({batch_size}, {input_len}, {output_len})")
     max_batch_size = model_runner.max_total_num_tokens // (input_len + output_len)
     if batch_size > max_batch_size:
         rank_print(
