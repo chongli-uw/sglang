@@ -179,6 +179,8 @@ class DeepseekV2MoE(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
+        
+        # NOTE: shared_experts is temporarily disabled. It should be enabled after hybrid DPxTP is supported.
         # if self.n_shared_experts is not None:
         #     shared_output = self.shared_experts(hidden_states)
         # router_logits: (num_tokens, n_experts)

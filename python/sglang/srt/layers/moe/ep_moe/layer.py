@@ -245,7 +245,6 @@ class All2AllEPMoE(torch.nn.Module):
         self.act_fn = SiluAndMul()
         self.token_dispatcher = All2AllEPTokenDispatcher(num_experts, self.tp_size, self.start_expert_id, self.end_expert_id)
 
-        # FIXME: A bug is found with zero_num_local_tokens_per_expert. When passed to all2all preprocess, it results in "CUDA error: invalid configuration argument"
         self.zero_num_local_tokens_per_expert = torch.zeros(self.num_experts, dtype=torch.int64)
     
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
