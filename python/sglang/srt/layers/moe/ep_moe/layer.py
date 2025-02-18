@@ -247,7 +247,6 @@ class All2AllEPMoE(torch.nn.Module):
 
         # FIXME: A bug is found with zero_num_local_tokens_per_expert. When passed to all2all preprocess, it results in "CUDA error: invalid configuration argument"
         self.zero_num_local_tokens_per_expert = torch.zeros(self.num_experts, dtype=torch.int64)
-        print(f"TP rank {get_tensor_model_parallel_rank()}: zero_num_local_tokens_per_expert {self.zero_num_local_tokens_per_expert}")
     
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
         assert self.quant_method is not None
@@ -258,6 +257,12 @@ class All2AllEPMoE(torch.nn.Module):
             )
             
         not_empty_inputs: bool = hidden_states.numel() > 0
+        
+        gateup_input = torch.empty(
+            (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
+            device=hidden_states.device,
+            dtype=self.fp8_dtype if self.use_fp8_w8a8 else hidden_states.dtype,
+        )
             
         if not_empty_inputs:
             topk_weights, topk_ids = select_experts(
@@ -273,11 +278,6 @@ class All2AllEPMoE(torch.nn.Module):
     
             reorder_topk_ids, src2dst, seg_indptr = run_moe_ep_preproess(
                 topk_ids, self.num_experts
-            )
-            gateup_input = torch.empty(
-                (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
-                device=hidden_states.device,
-                dtype=self.fp8_dtype if self.use_fp8_w8a8 else hidden_states.dtype,
             )
             
             if self.activation_scheme == "dynamic":
@@ -308,7 +308,7 @@ class All2AllEPMoE(torch.nn.Module):
         self.token_dispatcher.preprocess(num_local_tokens_per_expert)
         scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input)
 
-        seg_indptr_cur_rank = torch.cat([torch.zeros((1, ), dtype=seg_indptr.dtype, device=seg_indptr.device), 
+        seg_indptr_cur_rank = torch.cat([torch.zeros((1, ), dtype=num_local_tokens_per_expert.dtype, device=num_local_tokens_per_expert.device), 
                                          torch.cumsum(self.token_dispatcher.num_tokens_per_local_expert, dim=0)], dim=0) 
         
         weight_indices_cur_rank = torch.arange(
