@@ -178,6 +178,7 @@ class ModelRunner:
                 "enable_all2all_ep": server_args.enable_all2all_ep,
                 "device": server_args.device,
                 "enable_flashinfer_mla": server_args.enable_flashinfer_mla,
+                "disable_radix_cache": server_args.disable_radix_cache,
             }
         )
 
