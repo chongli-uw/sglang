@@ -836,6 +836,7 @@ class DeepseekV2Model(nn.Module):
             ]
         )
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.num_dense_layers = config.first_k_dense_replace
 
     def forward(
         self,
@@ -845,7 +846,7 @@ class DeepseekV2Model(nn.Module):
     ) -> torch.Tensor:
         hidden_states = self.embed_tokens(input_ids)
         residual = None
-        for i in range(len(self.layers)):
+        for i in range(self.num_dense_layers, len(self.layers)):
             layer = self.layers[i]
             hidden_states, residual = layer(
                 positions, hidden_states, forward_batch, residual
