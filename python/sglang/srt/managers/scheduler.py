@@ -31,6 +31,7 @@ import psutil
 import setproctitle
 import torch
 import zmq
+import pickle
 
 from sglang.global_config import global_config
 from sglang.srt.configs.model_config import ModelConfig
@@ -50,6 +51,7 @@ from sglang.srt.managers.io_struct import (
     InitWeightsUpdateGroupReqOutput,
     OpenSessionReqInput,
     OpenSessionReqOutput,
+    MetricsReq,
     ProfileReq,
     ReleaseMemoryOccupationReqInput,
     ReleaseMemoryOccupationReqOutput,
@@ -80,7 +82,7 @@ from sglang.srt.managers.schedule_policy import (
 from sglang.srt.managers.session_controller import Session
 from sglang.srt.managers.tp_worker import TpModelWorker
 from sglang.srt.managers.tp_worker_overlap_thread import TpModelWorkerClient
-from sglang.srt.managers.utils import validate_input_length
+from sglang.srt.managers.utils import validate_input_length, metrics_list
 from sglang.srt.mem_cache.chunk_cache import ChunkCache
 from sglang.srt.mem_cache.radix_cache import RadixCache
 from sglang.srt.metrics.collector import SchedulerMetricsCollector, SchedulerStats
@@ -1724,6 +1726,23 @@ class Scheduler:
         )
         del self.stashed_model_static_state
         return ResumeMemoryOccupationReqOutput()
+    
+    def metrics(self, recv_req: MetricsReq):
+        if recv_req == MetricsReq.START_METRICS:
+            self.start_metrics()
+        else:
+            self.stop_metrics()
+            
+    def start_metrics(self):
+        global metrics_list
+        metrics_list = []
+    
+    def stop_metrics(self):
+        global metrics_list
+        sglang_metrics_dir = os.getenv("SGLANG_TORCH_METRICS_DIR", ".")
+        with open(f"{sglang_metrics_dir}/sglang_metrics_dp{self.dp_rank}_tp{self.tp_rank}.pickle", "wb") as f:
+            pickle.dump(metrics_list, f)
+        metrics_list = None
 
     def profile(self, recv_req: ProfileReq):
         if recv_req == ProfileReq.START_PROFILE:

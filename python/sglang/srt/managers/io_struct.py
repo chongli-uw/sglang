@@ -515,6 +515,9 @@ class AbortReq:
     # The request id
     rid: str
 
+class MetricsReq(Enum):
+    START_METRICS = 1
+    STOP_METRICS = 2
 
 class ProfileReq(Enum):
     START_PROFILE = 1

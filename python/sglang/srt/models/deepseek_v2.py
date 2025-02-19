@@ -57,6 +57,7 @@ from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.utils import is_cuda_available, is_hip
+from sglang.srt.managers.utils import cur_step_runtime_recorder, metrics_list, StepRecorder
 
 is_hip_ = is_hip()
 
@@ -778,6 +779,8 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
     ) -> torch.Tensor:
         # Self Attention
+        global cur_step_runtime_recorder
+        cur_step_runtime_recorder.mark_attention_start()
         if not forward_batch.forward_mode.is_idle():
             if residual is None:
                 residual = hidden_states
@@ -793,6 +796,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             hidden_states, residual = self.post_attention_layernorm(
                 hidden_states, residual
             )
+        cur_step_runtime_recorder.mark_attention_end()
 
         # Fully Connected
         if self.enable_dp_attention:
@@ -847,6 +851,8 @@ class DeepseekV2Model(nn.Module):
         positions: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
+        global cur_step_runtime_recorder
+        cur_step_runtime_recorder = StepRecorder(input_ids.shape[0])
         hidden_states = self.embed_tokens(input_ids)
         residual = None
         for i in range(self.num_dense_layers, len(self.layers)):
@@ -856,6 +862,11 @@ class DeepseekV2Model(nn.Module):
             )
         if not forward_batch.forward_mode.is_idle():
             hidden_states, _ = self.norm(hidden_states, residual)
+            
+        global metrics_list
+        if metrics_list is not None:
+            metrics_list.append(cur_step_runtime_recorder.post_process())
+        cur_step_runtime_recorder = None
         return hidden_states
 
 
