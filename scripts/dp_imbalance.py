@@ -22,7 +22,10 @@ def make_plot(array, title, ylabel, filename):
     plt.figure(figsize=(10, 6))
     
     # Plot vertical lines for min-max range at each time step
-    plt.vlines(steps, minn, maxn, color='blue', linewidth=2)
+    plt.vlines(steps, minn, maxn, color='cyan', linewidth=2)
+    
+    for i in range(nparray.shape[0]):
+        plt.hlines(nparray[i], steps[i] - 0.5, steps[i] + 0.5, color='#8B0000', linewidth=2)
 
     # Add markers for max and min points
     # plt.scatter(steps, maxn, color='red', label='Max', zorder=5, s=1)
