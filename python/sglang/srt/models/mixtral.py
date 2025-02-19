@@ -176,8 +176,6 @@ class MixtralAttention(nn.Module):
                 prefix=f"{prefix}.o_proj",
             )
         else:
-            print(f"qkv_proj: {hidden_size} -> {self.head_dim * (self.total_num_heads + 2 * self.total_num_kv_heads)}")
-            
             self.qkv_proj = ReplicatedLinear(
                 hidden_size,
                 self.head_dim * (self.total_num_heads + 2 * self.total_num_kv_heads),
@@ -266,24 +264,26 @@ class MixtralDecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
     ) -> torch.Tensor:
         utils.cur_step_runtime_recorder.mark_attention_start()
+        if not forward_batch.forward_mode.is_idle():
         
-        # Self Attention
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = self.input_layernorm(hidden_states, residual)
-        hidden_states = self.self_attn(
-            positions=positions,
-            hidden_states=hidden_states,
-            forward_batch=forward_batch,
-        )
+            # Self Attention
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(hidden_states, residual)
+            hidden_states = self.self_attn(
+                positions=positions,
+                hidden_states=hidden_states,
+                forward_batch=forward_batch,
+            )
+            hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         
         utils.cur_step_runtime_recorder.mark_attention_end()
         
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.block_sparse_moe(hidden_states)
+        
         return hidden_states, residual
 
 
@@ -320,6 +320,7 @@ class MixtralModel(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
+        
         utils.cur_step_runtime_recorder = utils.StepRecorder(input_ids.shape[0])
         
         if input_embeds is None:
@@ -332,9 +333,11 @@ class MixtralModel(nn.Module):
             hidden_states, residual = layer(
                 positions, hidden_states, forward_batch, residual
             )
+        if not forward_batch.forward_mode.is_idle():
+            hidden_states, _ = self.norm(hidden_states, residual)
+            
         if utils.metrics_list is not None:
             utils.metrics_list.append(utils.cur_step_runtime_recorder.post_process())
-        hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
 
 
