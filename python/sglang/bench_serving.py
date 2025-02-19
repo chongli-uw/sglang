@@ -392,7 +392,6 @@ async def async_request_gserver(
 ) -> RequestFuncOutput:
     raise NotImplementedError()
 
-
 async def async_request_profile(api_url: str) -> RequestFuncOutput:
     async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         output = RequestFuncOutput()
@@ -911,6 +910,7 @@ async def benchmark(
     lora_name: str,
     extra_request_body: Dict[str, Any],
     profile: bool,
+    metrics: bool,
 ):
     if backend in ASYNC_REQUEST_FUNCS:
         request_func = ASYNC_REQUEST_FUNCS[backend]
@@ -962,6 +962,14 @@ async def benchmark(
         )
         if profile_output.success:
             print("Profiler started")
+            
+    if metrics:
+        print("SGLang will output metrics to file")
+        metrics_output = await async_request_profile(
+            api_url=base_url + "/start_metrics"
+        )
+        if metrics_output.success:
+            print("Profiler started")
 
     pbar = None if disable_tqdm else tqdm(total=len(input_requests))
 
@@ -985,6 +993,12 @@ async def benchmark(
             )
         )
     outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
+
+    if metrics:
+        print("Stopping profiler...")
+        metrics_output = await async_request_profile(api_url=base_url + "/stop_metrics")
+        if metrics_output.success:
+            print("Profiler stopped")
 
     # Stop profiler
     if profile:
@@ -1284,6 +1298,7 @@ def run_benchmark(args_: argparse.Namespace):
                 lora_name=args.lora_name,
                 extra_request_body=extra_request_body,
                 profile=args.profile,
+                metrics=args.metrics,
             )
         )
     else:
@@ -1305,6 +1320,7 @@ def run_benchmark(args_: argparse.Namespace):
                     lora_name=args.lora_name,
                     extra_request_body=extra_request_body,
                     profile=args.profile,
+                    metrics=args.metrics,
                 )
             )
 
@@ -1464,6 +1480,11 @@ if __name__ == "__main__":
         "--apply-chat-template",
         action="store_true",
         help="Apply chat template",
+    )
+    parser.add_argument(
+        "--metrics",
+        action="store_true",
+        help="Output metrics.",
     )
     parser.add_argument(
         "--profile",

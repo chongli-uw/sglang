@@ -232,14 +232,32 @@ async def flush_cache():
         "(When there are running or waiting requests, the operation will not be performed.)\n",
         status_code=200,
     )
+    
+@app.api_route("/start_metrics", methods=["GET", "POST"])
+async def start_metrics_async():
+    """Start recording metrics."""
+    _global_state.tokenizer_manager.start_metrics()
+    return Response(
+        content="Start recording metrics.\n",
+        status_code=200,
+    )
 
+
+@app.api_route("/stop_metrics", methods=["GET", "POST"])
+async def stop_metrics_async():
+    """Stop recording metrics."""
+    _global_state.tokenizer_manager.stop_metrics()
+    return Response(
+        content="Stop recording metrics. This will take some time.\n",
+        status_code=200,
+    )
 
 @app.api_route("/start_profile", methods=["GET", "POST"])
 async def start_profile_async():
-    """Start profiling."""
+    """Start recording metrics."""
     _global_state.tokenizer_manager.start_profile()
     return Response(
-        content="Start profiling.\n",
+        content="Start recording metrics.\n",
         status_code=200,
     )
 

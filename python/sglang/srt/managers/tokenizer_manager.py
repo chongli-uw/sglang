@@ -57,6 +57,7 @@ from sglang.srt.managers.io_struct import (
     InitWeightsUpdateGroupReqOutput,
     OpenSessionReqInput,
     OpenSessionReqOutput,
+    MetricsReq,
     ProfileReq,
     ReleaseMemoryOccupationReqInput,
     ReleaseMemoryOccupationReqOutput,
@@ -540,6 +541,14 @@ class TokenizerManager:
             return
         del self.rid_to_state[rid]
         req = AbortReq(rid)
+        self.send_to_scheduler.send_pyobj(req)
+        
+    def start_metrics(self):
+        req = MetricsReq.START_METRICS
+        self.send_to_scheduler.send_pyobj(req)
+
+    def stop_metrics(self):
+        req = MetricsReq.STOP_METRICS
         self.send_to_scheduler.send_pyobj(req)
 
     def start_profile(self):

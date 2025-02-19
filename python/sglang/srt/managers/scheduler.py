@@ -432,6 +432,7 @@ class Scheduler:
                 ),
                 (UpdateWeightsFromTensorReqInput, self.update_weights_from_tensor),
                 (GetWeightsByNameReqInput, self.get_weights_by_name),
+                (MetricsReq, self.metrics),
                 (ProfileReq, self.profile),
                 (OpenSessionReqInput, self.open_session),
                 (CloseSessionReqInput, self.close_session),
@@ -1739,7 +1740,7 @@ class Scheduler:
     
     def stop_metrics(self):
         global metrics_list
-        sglang_metrics_dir = os.getenv("SGLANG_TORCH_METRICS_DIR", ".")
+        sglang_metrics_dir = os.getenv("SGLANG_METRICS_DIR", ".")
         with open(f"{sglang_metrics_dir}/sglang_metrics_dp{self.dp_rank}_tp{self.tp_rank}.pickle", "wb") as f:
             pickle.dump(metrics_list, f)
         metrics_list = None
