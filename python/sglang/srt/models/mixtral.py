@@ -33,7 +33,7 @@ from sglang.srt.layers.linear import (
     RowParallelLinear,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessor
-from sglang.srt.layers.moe.ep_moe.layer import EPMoE
+from sglang.srt.layers.moe.ep_moe.layer import EPMoE, All2AllEPMoE
 from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
@@ -45,7 +45,7 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
-
+import sglang.srt.managers.utils as utils
 
 class MixtralMoE(nn.Module):
     """A tensor-parallel MoE implementation for Mixtral that shards each expert
@@ -80,7 +80,18 @@ class MixtralMoE(nn.Module):
             quant_config=None,
             prefix=f"{prefix}.gate",
         )
-        MoEImpl = EPMoE if global_server_args_dict["enable_ep_moe"] else FusedMoE
+        
+        def select_moe_type():
+            if global_server_args_dict["enable_ep_moe"]:
+                if global_server_args_dict["enable_all2all_ep"]:
+                    return All2AllEPMoE
+                else:
+                    return EPMoE
+            else:
+                return FusedMoE
+            
+        MoEImpl = select_moe_type()
+            
         self.experts = MoEImpl(
             num_experts=num_experts,
             top_k=top_k,
@@ -100,7 +111,7 @@ class MixtralMoE(nn.Module):
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
         final_hidden_states = self.experts(hidden_states, router_logits)
-        if self.tp_size > 1:
+        if self.tp_size > 1 and not global_server_args_dict["enable_dp_attention"]:
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
         return final_hidden_states.view(orig_shape)
 
@@ -116,45 +127,72 @@ class MixtralAttention(nn.Module):
         rope_theta: float = 10000,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        use_dp=False,
     ) -> None:
         super().__init__()
         self.hidden_size = hidden_size
         tp_size = get_tensor_model_parallel_world_size()
         self.total_num_heads = num_heads
         assert self.total_num_heads % tp_size == 0
-        self.num_heads = self.total_num_heads // tp_size
-        self.total_num_kv_heads = num_kv_heads
-        if self.total_num_kv_heads >= tp_size:
-            # Number of KV heads is greater than TP size, so we partition
-            # the KV heads across multiple tensor parallel GPUs.
-            assert self.total_num_kv_heads % tp_size == 0
+        if not use_dp:
+            self.num_heads = self.total_num_heads // tp_size
+            self.total_num_kv_heads = num_kv_heads
+            if self.total_num_kv_heads >= tp_size:
+                # Number of KV heads is greater than TP size, so we partition
+                # the KV heads across multiple tensor parallel GPUs.
+                assert self.total_num_kv_heads % tp_size == 0
+            else:
+                # Number of KV heads is less than TP size, so we replicate
+                # the KV heads across multiple tensor parallel GPUs.
+                assert tp_size % self.total_num_kv_heads == 0
+            self.num_kv_heads = max(1, self.total_num_kv_heads // tp_size)
         else:
-            # Number of KV heads is less than TP size, so we replicate
-            # the KV heads across multiple tensor parallel GPUs.
-            assert tp_size % self.total_num_kv_heads == 0
-        self.num_kv_heads = max(1, self.total_num_kv_heads // tp_size)
+            self.num_heads = self.total_num_heads
+            self.total_num_kv_heads = num_kv_heads
+            self.num_kv_heads = self.total_num_kv_heads
+            
+            
         self.head_dim = hidden_size // self.total_num_heads
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim**-0.5
         self.rope_theta = rope_theta
-
-        self.qkv_proj = QKVParallelLinear(
-            hidden_size,
-            self.head_dim,
-            self.total_num_heads,
-            self.total_num_kv_heads,
-            bias=False,
-            quant_config=quant_config,
-            prefix=f"{prefix}.qkv_proj",
-        )
-        self.o_proj = RowParallelLinear(
-            self.total_num_heads * self.head_dim,
-            hidden_size,
-            bias=False,
-            quant_config=quant_config,
-            prefix=f"{prefix}.o_proj",
-        )
+        
+        if not use_dp:
+            self.qkv_proj = QKVParallelLinear(
+                hidden_size,
+                self.head_dim,
+                self.total_num_heads,
+                self.total_num_kv_heads,
+                bias=False,
+                quant_config=quant_config,
+                prefix=f"{prefix}.qkv_proj",
+            )
+            self.o_proj = RowParallelLinear(
+                self.total_num_heads * self.head_dim,
+                hidden_size,
+                bias=False,
+                quant_config=quant_config,
+                prefix=f"{prefix}.o_proj",
+            )
+        else:
+            print(f"qkv_proj: {hidden_size} -> {self.head_dim * (self.total_num_heads + 2 * self.total_num_kv_heads)}")
+            
+            self.qkv_proj = ReplicatedLinear(
+                hidden_size,
+                self.head_dim * (self.total_num_heads + 2 * self.total_num_kv_heads),
+                bias=False,
+                quant_config=quant_config,
+                prefix=f"{prefix}.qkv_proj",
+            )
+            self.o_proj = ReplicatedLinear(
+                self.total_num_heads * self.head_dim,
+                hidden_size,
+                bias=False,
+                quant_config=quant_config,
+                prefix=f"{prefix}.o_proj",
+            )
+            
         self.rotary_emb = get_rope(
             self.head_dim,
             rotary_dim=self.head_dim,
@@ -205,6 +243,7 @@ class MixtralDecoderLayer(nn.Module):
             rope_theta=rope_theta,
             quant_config=quant_config,
             prefix=f"{prefix}.self_attn",
+            use_dp=global_server_args_dict["enable_dp_attention"],
         )
         self.block_sparse_moe = MixtralMoE(
             num_experts=config.num_local_experts,
@@ -226,6 +265,8 @@ class MixtralDecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> torch.Tensor:
+        utils.cur_step_runtime_recorder.mark_attention_start()
+        
         # Self Attention
         if residual is None:
             residual = hidden_states
@@ -237,7 +278,9 @@ class MixtralDecoderLayer(nn.Module):
             hidden_states=hidden_states,
             forward_batch=forward_batch,
         )
-
+        
+        utils.cur_step_runtime_recorder.mark_attention_end()
+        
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.block_sparse_moe(hidden_states)
@@ -258,6 +301,7 @@ class MixtralModel(nn.Module):
         self.embed_tokens = VocabParallelEmbedding(
             config.vocab_size,
             config.hidden_size,
+            enable_tp=not global_server_args_dict["enable_dp_attention"],
         )
         self.layers = nn.ModuleList(
             [
@@ -276,6 +320,8 @@ class MixtralModel(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
+        utils.cur_step_runtime_recorder = utils.StepRecorder(input_ids.shape[0])
+        
         if input_embeds is None:
             hidden_states = self.embed_tokens(input_ids)
         else:
@@ -286,6 +332,8 @@ class MixtralModel(nn.Module):
             hidden_states, residual = layer(
                 positions, hidden_states, forward_batch, residual
             )
+        if utils.metrics_list is not None:
+            utils.metrics_list.append(utils.cur_step_runtime_recorder.post_process())
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
 
@@ -301,8 +349,17 @@ class MixtralForCausalLM(nn.Module):
         self.config = config
         self.quant_config = quant_config
         self.model = MixtralModel(config, quant_config=quant_config, prefix="model")
-        self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
-        self.logits_processor = LogitsProcessor(config)
+        
+        if global_server_args_dict["enable_dp_attention"]:
+            self.lm_head = ReplicatedLinear(
+                    config.hidden_size,
+                    config.vocab_size,
+                    bias=False,
+                )
+            self.logits_processor = LogitsProcessor(config, skip_all_gather=True)
+        else:
+            self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
+            self.logits_processor = LogitsProcessor(config)
 
     def forward(
         self,

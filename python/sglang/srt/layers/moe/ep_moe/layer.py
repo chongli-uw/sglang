@@ -306,10 +306,12 @@ class All2AllEPMoE(torch.nn.Module):
             num_local_tokens_per_expert = self.zero_num_local_tokens_per_expert
 
         self.token_dispatcher.preprocess(num_local_tokens_per_expert)
-        utils.cur_step_runtime_recorder.record_moe_num_tokens_per_local_expert(self.token_dispatcher.num_tokens_per_local_expert)
+        if utils.cur_step_runtime_recorder is not None:
+            utils.cur_step_runtime_recorder.record_moe_num_tokens_per_local_expert(self.token_dispatcher.num_tokens_per_local_expert)
         scattered_input = self.token_dispatcher.moe_token_scatter(gateup_input)
         
-        utils.cur_step_runtime_recorder.mark_moe_start()
+        if utils.cur_step_runtime_recorder is not None:
+            utils.cur_step_runtime_recorder.mark_moe_start()
 
         seg_indptr_cur_rank = torch.cat([torch.zeros((1, ), dtype=num_local_tokens_per_expert.dtype, device=num_local_tokens_per_expert.device), 
                                          torch.cumsum(self.token_dispatcher.num_tokens_per_local_expert, dim=0)], dim=0) 
@@ -388,7 +390,8 @@ class All2AllEPMoE(torch.nn.Module):
             scale_b=self.w2_weight_scale,
         )
         
-        utils.cur_step_runtime_recorder.mark_moe_end()
+        if utils.cur_step_runtime_recorder is not None:
+            utils.cur_step_runtime_recorder.mark_moe_end()
         
         gathered_output = self.token_dispatcher.moe_token_gather(down_output)
 
