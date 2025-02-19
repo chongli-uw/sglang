@@ -82,7 +82,8 @@ from sglang.srt.managers.schedule_policy import (
 from sglang.srt.managers.session_controller import Session
 from sglang.srt.managers.tp_worker import TpModelWorker
 from sglang.srt.managers.tp_worker_overlap_thread import TpModelWorkerClient
-from sglang.srt.managers.utils import validate_input_length, metrics_list
+from sglang.srt.managers.utils import validate_input_length
+import sglang.srt.managers.utils as utils
 from sglang.srt.mem_cache.chunk_cache import ChunkCache
 from sglang.srt.mem_cache.radix_cache import RadixCache
 from sglang.srt.metrics.collector import SchedulerMetricsCollector, SchedulerStats
@@ -1735,15 +1736,13 @@ class Scheduler:
             self.stop_metrics()
             
     def start_metrics(self):
-        global metrics_list
-        metrics_list = []
+        utils.metrics_list = []
     
     def stop_metrics(self):
-        global metrics_list
         sglang_metrics_dir = os.getenv("SGLANG_METRICS_DIR", ".")
         with open(f"{sglang_metrics_dir}/sglang_metrics_dp{self.dp_rank}_tp{self.tp_rank}.pickle", "wb") as f:
-            pickle.dump(metrics_list, f)
-        metrics_list = None
+            pickle.dump(utils.metrics_list, f)
+        utils.metrics_list = None
 
     def profile(self, recv_req: ProfileReq):
         if recv_req == ProfileReq.START_PROFILE:
