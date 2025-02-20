@@ -175,6 +175,7 @@ class ModelRunner:
                 "enable_nan_detection": server_args.enable_nan_detection,
                 "enable_dp_attention": server_args.enable_dp_attention,
                 "enable_ep_moe": server_args.enable_ep_moe,
+                "enable_all2all_ep": server_args.enable_all2all_ep,
                 "device": server_args.device,
                 "enable_flashinfer_mla": server_args.enable_flashinfer_mla,
                 "disable_radix_cache": server_args.disable_radix_cache,
@@ -594,6 +595,7 @@ class ModelRunner:
             )
 
         self.max_total_num_tokens = self.profile_max_num_token(total_gpu_memory)
+        self.max_total_num_tokens = int(self.max_total_num_tokens * 0.8)
 
         if max_num_reqs is None:
             max_num_reqs = min(
