@@ -131,8 +131,14 @@ class All2AllEPTokenDispatcher:
         # [ep_size, num_global_experts]
         num_global_tokens_per_expert = torch.zeros((self.ep_size, self.num_global_experts), dtype=num_local_tokens_per_expert.dtype, device=num_local_tokens_per_expert.device)
         
+        if utils.cur_step_runtime_recorder is not None:
+            utils.cur_step_runtime_recorder.mark_all_gather_start()
+            
         # [num_global_experts] -> [ep_size, num_global_experts]
         torch.distributed.all_gather_into_tensor(num_global_tokens_per_expert, num_local_tokens_per_expert, self.ep_group)
+        
+        if utils.cur_step_runtime_recorder is not None:
+            utils.cur_step_runtime_recorder.mark_all_gather_end()
         
         # [ep_size, num_global_experts] -> [ep_size, num_local_experts]
         num_global_tokens_per_local_expert = num_global_tokens_per_expert[ : , self.start_expert_id : self.end_expert_id].contiguous()

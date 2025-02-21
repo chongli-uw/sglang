@@ -75,6 +75,8 @@ def main():
     ntokens_per_expert = [] # n * nexperts
     attn_elapse = []
     moe_elapse = []
+    attn_all_gather_elapse = []
+    all_gather_elapse = []
     
     for i in range(nsteps):
         
@@ -84,20 +86,29 @@ def main():
             ntokens = []
             attn = []
             moe = []
+            all_gather = []
+            attn_all_gather = []
             for k in range(nranks):
                 metric = metrics_all_ranks[k][i]
                 ntokens.extend(metric.moe_num_tokens_per_local_expert[j])
                 attn.append(metric.attention_elapse[j])
                 moe.append(metric.moe_elapse[j])
+                attn_all_gather.append(metric.attention_elapse[j] + metric.all_gather_elapse[j])
+                all_gather.append(metric.all_gather_elapse[j])
+                
                 
             ntokens_per_expert.append(ntokens)
             attn_elapse.append(attn)
             moe_elapse.append(moe)
+            all_gather_elapse.append(all_gather)
+            attn_all_gather_elapse.append(attn_all_gather)
             
     make_plot(batch_sizes, 'Batch Size', 'Batch Size', 'batch_size')
     make_plot(ntokens_per_expert, 'Number of Tokens per Expert', 'Number of Tokens', 'ntokens_per_expert')
     make_plot(attn_elapse, 'Attention Elapse Time', 'Time (ms)', 'attn_elapse')
     make_plot(moe_elapse, 'MoE Elapse Time', 'Time (ms)', 'moe_elapse')
+    make_plot(all_gather_elapse, 'AllGather', 'Time (ms)', filename='all_gather')
+    make_plot(attn_all_gather_elapse, 'Attn + AllGather', 'Time (ms)', 'attn_all_gather')
                 
 if __name__ == '__main__':
     main()

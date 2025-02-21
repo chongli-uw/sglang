@@ -969,7 +969,7 @@ async def benchmark(
             api_url=base_url + "/start_metrics"
         )
         if metrics_output.success:
-            print("Profiler started")
+            print("Metrics started")
 
     pbar = None if disable_tqdm else tqdm(total=len(input_requests))
 
@@ -995,10 +995,10 @@ async def benchmark(
     outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
 
     if metrics:
-        print("Stopping profiler...")
+        print("Stopping metrics...")
         metrics_output = await async_request_profile(api_url=base_url + "/stop_metrics")
         if metrics_output.success:
-            print("Profiler stopped")
+            print("Metrics stopped")
 
     # Stop profiler
     if profile:

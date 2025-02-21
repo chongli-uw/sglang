@@ -50,6 +50,7 @@ def validate_input_length(
 class StepMetrics:
     batch_size: int
     attention_elapse: List[float]
+    all_gather_elapse: List[float]
     moe_elapse: List[float]
     moe_num_tokens_per_local_expert: List[List[int]]
     
@@ -60,6 +61,9 @@ class StepRecorder:
         self.batch_size = batch_size
         self.attention_start_timestamp: List[torch.cuda.Event] = []
         self.attention_end_timestamp: List[torch.cuda.Event] = []
+        
+        self.all_gather_start_timestamp: List[torch.cuda.Event] = []
+        self.all_gather_end_timestamp: List[torch.cuda.Event] = []
         
         self.moe_start_timestamp: List[torch.cuda.Event] = []
         self.moe_end_timestamp: List[torch.cuda.Event] = []
@@ -85,15 +89,26 @@ class StepRecorder:
         end.record()
         self.moe_end_timestamp.append(end)
         
+    def mark_all_gather_start(self):
+        start = torch.cuda.Event(enable_timing=True)
+        start.record()
+        self.all_gather_start_timestamp.append(start)
+        
+    def mark_all_gather_end(self):
+        end = torch.cuda.Event(enable_timing=True)
+        end.record()
+        self.all_gather_end_timestamp.append(end)
+        
     def record_moe_num_tokens_per_local_expert(self, num_tokens_per_local_expert: torch.Tensor):
         self.moe_num_tokens_per_local_expert.append(num_tokens_per_local_expert)
     
     def post_process(self) -> StepMetrics:
         torch.cuda.synchronize()
         attn_elapse = [start.elapsed_time(end) for start, end in zip(self.attention_start_timestamp, self.attention_end_timestamp)]
+        all_gather_elapse = [start.elapsed_time(end) for start, end in zip(self.all_gather_start_timestamp, self.all_gather_end_timestamp)]
         moe_elapse = [start.elapsed_time(end) for start, end in zip(self.moe_start_timestamp, self.moe_end_timestamp)]
         moe_num_tokens_per_local_expert = [x.view(-1).tolist() for x in self.moe_num_tokens_per_local_expert]
-        return StepMetrics(self.batch_size, attn_elapse, moe_elapse, moe_num_tokens_per_local_expert)
+        return StepMetrics(self.batch_size, attn_elapse, all_gather_elapse, moe_elapse, moe_num_tokens_per_local_expert)
         
 cur_step_runtime_recorder: StepRecorder = None
 
