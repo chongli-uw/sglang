@@ -279,7 +279,7 @@ class MixtralDecoderLayer(nn.Module):
             )
             hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         
-        utils.cur_step_runtime_recorder.mark_attention_end()
+        # utils.cur_step_runtime_recorder.mark_attention_end()
         
         # Fully Connected
         hidden_states = self.block_sparse_moe(hidden_states)
