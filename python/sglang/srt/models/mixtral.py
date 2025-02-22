@@ -176,12 +176,16 @@ class MixtralAttention(nn.Module):
                 prefix=f"{prefix}.o_proj",
             )
         else:
-            self.qkv_proj = ReplicatedLinear(
+            self.qkv_proj = QKVParallelLinear(
                 hidden_size,
-                self.head_dim * (self.total_num_heads + 2 * self.total_num_kv_heads),
+                self.head_dim,
+                self.total_num_heads,
+                self.total_num_kv_heads,
                 bias=False,
                 quant_config=quant_config,
                 prefix=f"{prefix}.qkv_proj",
+                tp_rank=0,
+                tp_size=1,
             )
             self.o_proj = ReplicatedLinear(
                 self.total_num_heads * self.head_dim,
