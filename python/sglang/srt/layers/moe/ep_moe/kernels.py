@@ -82,7 +82,7 @@ def pre_reorder_triton_kernel(
     src_ptr = input_ptr + src_idx * hidden_size
     for idx in range(topk):
         expert_id = tl.load(topk_ids_ptr + idx)
-        if expert_id >= start_expert_id and expert_id <= end_expert_id:
+        if expert_id >= start_expert_id and expert_id < end_expert_id:
             if a1_scales_ptr is not None:
                 scale = 1.0 / tl.load(a1_scales_ptr + expert_id - start_expert_id)
             else:
@@ -116,7 +116,7 @@ def silu_and_mul_triton_kernel(
 
     pid = tl.program_id(0)
     expert_id = tl.load(reorder_topk_ids + pid)
-    if expert_id >= start_expert_id and expert_id <= end_expert_id:
+    if expert_id >= start_expert_id and expert_id < end_expert_id:
         gateup_output_ptr = gateup_output + pid * hidden_size
         gate_output_ptr = gateup_output_ptr
         up_output_ptr = gateup_output_ptr + half_hidden_size
@@ -240,7 +240,7 @@ def post_reorder_triton_kernel(
         sum_vec = tl.zeros([BLOCK_SIZE], dtype=InDtype)
         for idx in range(topk):
             expert_id = tl.load(topk_ids_ptr + idx)
-            if expert_id >= start_expert_id and expert_id <= end_expert_id:
+            if expert_id >= start_expert_id and expert_id < end_expert_id:
                 computed = True
                 dst_idx = tl.load(src2dst_ptr + idx)
                 weigh_scale = tl.load(topk_weights_ptr + idx).to(InDtype)

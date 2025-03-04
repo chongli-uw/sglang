@@ -43,7 +43,7 @@ from sglang.srt.layers.linear import (
     RowParallelLinear,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessor
-from sglang.srt.layers.moe.ep_moe.layer import EPMoE
+from sglang.srt.layers.moe.ep_moe.layer import EPMoE, All2AllEPMoE
 from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.quantization.fp8_utils import (
@@ -148,8 +148,18 @@ class DeepseekV2MoE(nn.Module):
             )
 
         self.gate = MoEGate(config=config)
+        
+        def select_moe_type():
+            if global_server_args_dict["enable_ep_moe"]:
+                if global_server_args_dict["enable_all2all_ep"]:
+                    return All2AllEPMoE
+                else:
+                    return EPMoE
+            else:
+                return FusedMoE
 
-        MoEImpl = EPMoE if global_server_args_dict["enable_ep_moe"] else FusedMoE
+        MoEImpl = select_moe_type()
+        
         self.experts = MoEImpl(
             num_experts=config.n_routed_experts,
             top_k=config.num_experts_per_tok,
@@ -176,17 +186,19 @@ class DeepseekV2MoE(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        if self.n_shared_experts is not None:
-            shared_output = self.shared_experts(hidden_states)
+        
+        # NOTE: shared_experts is temporarily disabled. It should be enabled after hybrid DPxTP is supported.
+        # if self.n_shared_experts is not None:
+        #     shared_output = self.shared_experts(hidden_states)
         # router_logits: (num_tokens, n_experts)
         router_logits = self.gate(hidden_states)
         final_hidden_states = (
             self.experts(hidden_states=hidden_states, router_logits=router_logits)
             * self.routed_scaling_factor
         )
-        if shared_output is not None:
-            final_hidden_states = final_hidden_states + shared_output
-        if self.tp_size > 1:
+        # if shared_output is not None:
+        #     final_hidden_states = final_hidden_states + shared_output
+        if self.tp_size > 1 and not global_server_args_dict["enable_all2all_ep"]:
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
 
         return final_hidden_states.view(num_tokens, hidden_dim)
@@ -905,6 +917,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             and layer_id % config.moe_layer_freq == 0
         ):
             self.mlp = DeepseekV2MoE(config=config, quant_config=quant_config)
+            self.use_all2all_ep = global_server_args_dict["enable_all2all_ep"]
         else:
             self.mlp = DeepseekV2MLP(
                 hidden_size=config.hidden_size,
@@ -912,6 +925,8 @@ class DeepseekV2DecoderLayer(nn.Module):
                 hidden_act=config.hidden_act,
                 quant_config=quant_config,
             )
+            self.use_all2all_ep = False
+            
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
@@ -943,11 +958,14 @@ class DeepseekV2DecoderLayer(nn.Module):
 
         # Fully Connected
         if self.enable_dp_attention:
-            hidden_states, start_idx, end_idx = all_gather(
-                hidden_states, forward_batch, self.tp_rank, self.tp_size, self.tp_group
-            )
-            hidden_states = self.mlp(hidden_states)
-            hidden_states = hidden_states[start_idx:end_idx]
+            if not self.use_all2all_ep:
+                hidden_states, start_idx, end_idx = all_gather(
+                    hidden_states, forward_batch, self.tp_rank, self.tp_size, self.tp_group
+                )
+                hidden_states = self.mlp(hidden_states)
+                hidden_states = hidden_states[start_idx:end_idx]
+            else:
+                hidden_states = self.mlp(hidden_states)
         else:
             hidden_states = self.mlp(hidden_states)
 
