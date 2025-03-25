@@ -481,6 +481,50 @@ class DummyModelLoader(BaseModelLoader):
             # NOTE(woosuk): For accurate performance evaluation, we assign
             # random values to the weights.
             initialize_dummy_weights(model)
+            
+            # Fix error in DeepseekV2AttentionMLA regarding w_kc and w_vc, when load_format=DUMMY.
+            # Modified from DeepseekV2ForCausalLM.load_weights().
+            if 'deepseek' in model_config.hf_config.model_type:
+                from sglang.srt.managers.schedule_batch import global_server_args_dict
+                from sglang.srt.layers.quantization.fp8_utils import block_quant_to_tensor_quant
+      
+                # TODO does not support quantization (fp8).           
+                assert model.quant_config is None, (
+                    "Do not support quantization when load_format=DUMMY, "
+                    "please remove quantization_config in config.json."
+                )
+
+                if not global_server_args_dict["disable_mla"]:
+                    for layer_id in range(model.config.num_hidden_layers):
+                        self_attn = model.model.layers[layer_id].self_attn
+                        w = self_attn.kv_b_proj.weight
+
+                        if hasattr(model.quant_config, "weight_block_size") and w.dtype in (
+                            torch.float8_e4m3fn,
+                            torch.float8_e4m3fnuz,
+                        ):
+                            weight_block_size = model.quant_config.weight_block_size
+                            if weight_block_size is not None:
+                                assert hasattr(self_attn.kv_b_proj, "weight_scale_inv")
+                                weight = w
+                                weight_scale = self_attn.kv_b_proj.weight_scale_inv
+
+                                w, scale = block_quant_to_tensor_quant(
+                                    weight, weight_scale, weight_block_size
+                                )
+                                self_attn.w_scale = scale
+                        
+                        w_kc, w_vc = w.unflatten(
+                            0, (-1, self_attn.qk_nope_head_dim + self_attn.v_head_dim)
+                        ).split([self_attn.qk_nope_head_dim, self_attn.v_head_dim], dim=1)
+                        self_attn.w_kc = w_kc.transpose(1, 2).contiguous().transpose(1, 2)
+                        self_attn.w_vc = w_vc.contiguous().transpose(1, 2)
+                        if (
+                            hasattr(self_attn.kv_b_proj, "weight_scale")
+                            and self_attn.w_scale is None
+                        ):
+                            self_attn.w_scale = self_attn.kv_b_proj.weight_scale
+            
         return model.eval()
 
 
