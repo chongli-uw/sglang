@@ -49,6 +49,7 @@ def validate_input_length(
 @dataclass
 class StepMetrics:
     batch_size: int
+    is_decode: bool
     attention_elapse: List[float]
     all_gather_elapse: List[float]
     moe_elapse: List[float]
@@ -56,9 +57,10 @@ class StepMetrics:
     
 class StepRecorder:
     
-    def __init__(self, batch_size):
+    def __init__(self, batch_size, is_decode):
         
         self.batch_size = batch_size
+        self.is_decode = is_decode
         self.attention_start_timestamp: List[torch.cuda.Event] = []
         self.attention_end_timestamp: List[torch.cuda.Event] = []
         
@@ -108,7 +110,7 @@ class StepRecorder:
         all_gather_elapse = [start.elapsed_time(end) for start, end in zip(self.all_gather_start_timestamp, self.all_gather_end_timestamp)]
         moe_elapse = [start.elapsed_time(end) for start, end in zip(self.moe_start_timestamp, self.moe_end_timestamp)]
         moe_num_tokens_per_local_expert = [x.view(-1).tolist() for x in self.moe_num_tokens_per_local_expert]
-        return StepMetrics(self.batch_size, attn_elapse, all_gather_elapse, moe_elapse, moe_num_tokens_per_local_expert)
+        return StepMetrics(self.batch_size, self.is_decode, attn_elapse, all_gather_elapse, moe_elapse, moe_num_tokens_per_local_expert)
         
 cur_step_runtime_recorder: StepRecorder = None
 

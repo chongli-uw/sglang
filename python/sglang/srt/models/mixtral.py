@@ -325,7 +325,7 @@ class MixtralModel(nn.Module):
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
         
-        utils.cur_step_runtime_recorder = utils.StepRecorder(input_ids.shape[0])
+        utils.cur_step_runtime_recorder = utils.StepRecorder(input_ids.shape[0], forward_batch.forward_mode.is_decode())
         
         if input_embeds is None:
             hidden_states = self.embed_tokens(input_ids)
