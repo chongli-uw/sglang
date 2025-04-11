@@ -397,12 +397,10 @@ class All2AllEPMoE(torch.nn.Module):
             scale_b=self.w2_weight_scale,
         )
         
-
-        
-        gathered_output = self.token_dispatcher.moe_token_gather(down_output)
-        
         if utils.cur_step_runtime_recorder is not None:
             utils.cur_step_runtime_recorder.mark_moe_end()
+        
+        gathered_output = self.token_dispatcher.moe_token_gather(down_output)
 
         # PostReorder
         output = torch.empty_like(hidden_states)
