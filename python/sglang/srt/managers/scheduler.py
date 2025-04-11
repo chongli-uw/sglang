@@ -1740,6 +1740,8 @@ class Scheduler:
     
     def stop_metrics(self):
         sglang_metrics_dir = os.getenv("SGLANG_METRICS_DIR", ".")
+        if not os.path.exists(sglang_metrics_dir):
+            os.makedirs(sglang_metrics_dir, exist_ok=True)
         with open(f"{sglang_metrics_dir}/sglang_metrics_dp{self.dp_rank}_tp{self.tp_rank}.pickle", "wb") as f:
             pickle.dump(utils.metrics_list, f)
         utils.metrics_list = None
