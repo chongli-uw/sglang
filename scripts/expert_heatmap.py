@@ -6,19 +6,51 @@ from typing import List
 import matplotlib.pyplot as plt
 import numpy as np
 
+def heatmapN(data_list, title_list, label_list, save_path):
+    n = len(data_list)
+    fig, axes = plt.subplots(n, 1, figsize=(10, 2.7*n))
+    
+    indexes = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+    assert n <= len(indexes)
+    
+    if n == 1:
+        axes = [axes]
+    
+    images = []
+    for i, (data, title, label, ax) in enumerate(zip(data_list, title_list, label_list, axes)):
+        data = np.transpose(data)
+        im = ax.imshow(data, cmap='hot', interpolation='nearest', vmin=0, vmax=np.max(data))
+        ax.set_title(f"({indexes[i]}) {title}", loc='center', y=-0.2)
+        ax.set_ylabel("Expert ID")
+        ax.set_yticks(np.arange(data.shape[0]))
+        if i == 0:
+            ax.xaxis.set_ticks_position('top')
+            ax.xaxis.set_label_position('top')
+            ax.tick_params(axis='x', which='both', bottom=False, top=True)
+            ax.set_xlabel("Layer ID")
+            ax.set_xticks(np.arange(data.shape[1]))
+        else:
+            ax.set_xticks([])
+        images.append(im)
+        plt.colorbar(im, ax=ax, label=label, shrink=1.0)
+        
+    fig.subplots_adjust(hspace=0, wspace=0)
+    fig.tight_layout()
+    fig.savefig(save_path, bbox_inches='tight', dpi=300)
+
 def heatmap(data, title, label, save_path):
     data = np.transpose(data)
     # use pyplot to draw a heatmap of global_expert_num_tokens
     plt.figure(figsize=(10, 6))
-    plt.imshow(data, cmap='hot', interpolation='nearest')
+    plt.imshow(data, cmap='hot', interpolation='nearest', vmin=0, vmax=np.max(data))
     plt.title(title)
     plt.xlabel("Layer ID")
     plt.ylabel("Expert ID")
-    plt.colorbar(label=label)
+    plt.colorbar(label=label, shrink=0.5)
     plt.xticks(np.arange(data.shape[1]), np.arange(data.shape[1]))
     plt.yticks(np.arange(data.shape[0]), np.arange(data.shape[0]))
     plt.grid(False)
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path, bbox_inches='tight', pad_inches=0.1, dpi=300)
 
 def main():
     directory = sys.argv[1]
@@ -55,7 +87,6 @@ def main():
     n = nlayers_per_step * nsteps
     
     batch_sizes = [] # n * nranks
-    is_decode = [] # n * nranks
     ntokens_per_expert = [] # n * nexperts
     attn_elapse = []
     moe_elapse = []
@@ -67,8 +98,8 @@ def main():
     for i in range(nsteps):
         
         batch_sizes.append([metrics_all_ranks[k][i].batch_size for k in range(nranks)])
-        is_decode.append([metrics_all_ranks[k][i].is_decode for k in range(nranks)])
-        
+        is_decode = [metrics_all_ranks[k][i].is_decode for k in range(nranks)]
+
         step_is_decode = all(is_decode)
         if step_is_decode:
             decode_steps.append(i)
@@ -93,7 +124,7 @@ def main():
             all_gather_elapse.append(all_gather)
             attn_all_gather_elapse.append(attn_all_gather)
             
-    print(f"decode steps: {decode_steps}")
+    print(f"decode steps: {len(decode_steps)}")
             
     expert_num_tokens = np.array(ntokens_per_expert).reshape((nsteps, nlayers_per_step, -1))
     moe_elapse = np.array(moe_elapse).reshape((nsteps, nlayers_per_step, -1))
@@ -101,7 +132,9 @@ def main():
     
     decode_expert_num_tokens = expert_num_tokens[decode_steps]
     decode_moe_elapse = moe_elapse[decode_steps]
-    decode_global_expert_num_tokens = decode_expert_num_tokens.sum(axis=0) / 1000
+    decode_global_expert_num_tokens = decode_expert_num_tokens.sum(axis=0)
+    mean_decode_expert_num_tokens = decode_global_expert_num_tokens / len(decode_steps)
+    decode_global_expert_num_tokens = decode_global_expert_num_tokens / 1000.0
     
     def get_path(filename):
         return os.path.join(directory, filename)
@@ -109,13 +142,27 @@ def main():
     def get_decode_path(filename):
         return os.path.join(directory, f"decode_{filename}")
     
+    def get_stall_percentage(data):
+        return 1 - data / np.max(data, axis=1, keepdims=True) 
+    
     heatmap(global_expert_num_tokens, "global #tokens per expert", "#thousand tokens", get_path("global_expert_num_tokens.png"))
     heatmap(expert_num_tokens[100], "one batch #tokens per expert", "#tokens", get_path("one_batch_expert_num_tokens.png"))
     heatmap(moe_elapse[100], "one batch execution time per expert", "time cost(ms)", get_path("moe_elapse.png"))
     
-    heatmap(decode_global_expert_num_tokens, "decode #tokens per expert", "#thousand tokens", get_decode_path("decode_global_expert_num_tokens.png"))
-    heatmap(decode_expert_num_tokens[50], "decode one batch #tokens per expert", "#tokens", get_decode_path("decode_one_batch_expert_num_tokens.png"))
-    heatmap(decode_moe_elapse[50], "decode one batch execution time per expert", "time cost(ms)", get_decode_path("decode_moe_elapse.png"))
+    heatmap(decode_global_expert_num_tokens, "decode #thousand tokens per expert", "#thousand tokens", get_decode_path("decode_global_expert_num_tokens.pdf"))
+    heatmap(decode_expert_num_tokens[200], "decode one batch #tokens per expert", "#tokens", get_decode_path("decode_one_batch_expert_num_tokens_1.pdf"))
+    heatmap(decode_moe_elapse[200], "decode one batch execution time per expert", "time cost(ms)", get_decode_path("decode_moe_elapse_1.pdf"))
+    heatmap(get_stall_percentage(decode_moe_elapse[200]), "decode one batch stall percentage", "stall percentage", get_decode_path("decode_stall_percentage_1.pdf"))
+    
+    heatmapN(
+        [decode_global_expert_num_tokens, decode_expert_num_tokens[0], get_stall_percentage(decode_moe_elapse[0])], 
+        ["global #thousand tokens per expert", "one batch #tokens per expert", "one batch stall percentage"], 
+        ["#thousand tokens", "#tokens", "stall percentage"], 
+        get_decode_path("deocde_combined.pdf")
+    )
+    
+    # diff_num_tokens = decode_expert_num_tokens[200] - mean_decode_expert_num_tokens
+    # heatmap(diff_num_tokens, "decode #tokens per expert", "#tokens", get_decode_path("diff_one_batch_vs_avg.png"))
     
 if __name__ == '__main__':
     main()
