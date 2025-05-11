@@ -22,6 +22,9 @@ from sglang.srt.layers.moe.ep_moe.kernels import (
     deepep_permute_triton_kernel,
     deepep_post_reorder_triton_kernel,
     deepep_run_moe_deep_preprocess,
+    run_moe_ep_preproess,
+    pre_reorder_triton_kernel,
+    post_reorder_triton_kernel,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 
@@ -665,3 +668,131 @@ class DeepEPDispatcher:
             return self._low_latency_dispatcher
         else:
             raise ValueError(f"Invalid deepep_mode: {self.deepep_mode}")
+
+
+class NCCLDispatcher:
+    
+    def __init__(
+        self, 
+        num_experts: int, 
+        ep_size: int, 
+        start_expert_id: int, 
+        end_expert_id: int,
+        ep_group: dist.ProcessGroup,
+    ):
+        # expert_id range: [start_expert_id, end_expert_id)]
+        self.num_global_experts = num_experts
+        self.ep_size = ep_size
+        self.num_local_experts = num_experts // ep_size
+        self.start_expert_id = start_expert_id
+        self.end_expert_id = end_expert_id
+        self.ep_group = ep_group
+
+        self.input_splits: torch.Tensor = None
+        self.output_splits: torch.Tensor = None
+        self.num_global_tokens_per_local_expert_cpu: torch.Tensor = None
+        self.num_tokens_per_local_expert: torch.Tensor = None
+        
+        if self.num_local_experts > 1:
+            input_chunk_idxs = torch.arange(num_experts)
+            self.permute_input_by_local_expert_index = input_chunk_idxs.view(ep_size, self.num_local_experts).t().ravel().tolist()
+            self.restore_output_by_local_experts_index = input_chunk_idxs.view(self.num_local_experts, ep_size).t().ravel().tolist()
+
+    def permute_input_by_local_expert(self, input: torch.Tensor, split_sizes: torch.Tensor) -> torch.Tensor:
+        assert self.num_local_experts > 1, "input permutation is only needed when num_local_experts > 1"
+        input = torch.split(input, split_sizes.tolist(), dim=0)
+        return torch.cat([input[i] for i in self.permute_input_by_local_expert_index], dim=0)
+
+    def restore_output_by_local_experts(self, output: torch.Tensor, split_sizes: torch.Tensor) -> torch.Tensor:
+        assert self.num_local_experts > 1, "output restore is only needed when num_local_experts > 1"
+        output = torch.split(output, split_sizes.tolist(), dim=0)
+        return torch.cat([output[i] for i in self.restore_output_by_local_experts_index], dim=0)
+
+    def preprocess(self, num_local_tokens_per_expert: torch.Tensor):
+
+        # num_local_tokens_per_expert: [num_global_experts]
+        # ep_size * num_local_experts == num_global_experts
+        self.input_splits = num_local_tokens_per_expert.view(self.ep_size, self.num_local_experts).sum(-1).to("cpu", non_blocking=True).numpy()
+
+        # [ep_size, num_global_experts]
+        num_global_tokens_per_expert = torch.zeros((self.ep_size, self.num_global_experts), dtype=num_local_tokens_per_expert.dtype, device=num_local_tokens_per_expert.device)
+        
+        # [num_global_experts] -> [ep_size, num_global_experts]
+        torch.distributed.all_gather_into_tensor(num_global_tokens_per_expert, num_local_tokens_per_expert, self.ep_group)
+        
+        # [ep_size, num_global_experts] -> [ep_size, num_local_experts]
+        num_global_tokens_per_local_expert = num_global_tokens_per_expert[ : , self.start_expert_id : self.end_expert_id].contiguous()
+        self.num_global_tokens_per_local_expert_cpu = num_global_tokens_per_local_expert.to("cpu", non_blocking=True)
+
+        # [ep_size, num_local_experts] -> [ep_size]
+        num_global_tokens_per_rank = num_global_tokens_per_local_expert.sum(-1)
+        self.output_splits = num_global_tokens_per_rank.to("cpu", non_blocking=True).numpy()
+
+        # [ep_size, num_local_experts] -> [num_local_experts]
+        self.num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(0)
+    
+    def dispatch(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor) -> torch.Tensor:
+        
+        gateup_input = torch.empty(
+            (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
+            device=hidden_states.device,
+            dtype=(
+                self.fp8_dtype
+                if (self.use_fp8_w8a8 and not self.use_block_quant)
+                else hidden_states.dtype
+            ),
+        )
+        
+        _, src2dst, seg_indptr = run_moe_ep_preproess(
+            topk_idx, self.num_global_experts
+        )
+        
+        self.src2dst = src2dst
+
+        pre_reorder_triton_kernel[(hidden_states.shape[0],)](
+            hidden_states,
+            gateup_input,
+            src2dst,
+            topk_idx,
+            self.w13_input_scale,
+            self.start_expert_id,
+            self.end_expert_id,
+            self.top_k,
+            hidden_states.shape[1],
+            BLOCK_SIZE=512,
+        )
+        num_local_tokens_per_expert = seg_indptr[1:] - seg_indptr[:-1]
+        self.preprocess(num_local_tokens_per_expert)
+
+        global_input_tokens = torch.empty((sum(self.output_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
+        torch.distributed.all_to_all_single(global_input_tokens, hidden_states, self.output_splits, self.input_splits, self.ep_group)
+        
+        if self.num_local_experts > 1:
+            global_input_tokens = self.permute_input_by_local_expert(global_input_tokens, self.num_global_tokens_per_local_expert_cpu.ravel())
+            
+        seg_indptr_cur_rank = torch.cat([torch.zeros((1, ), dtype=num_local_tokens_per_expert.dtype, device=num_local_tokens_per_expert.device), 
+                        torch.cumsum(self.num_tokens_per_local_expert, dim=0)], dim=0) 
+
+        return global_input_tokens, seg_indptr_cur_rank
+        
+    def combine(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor) -> torch.Tensor:
+        if self.num_local_experts > 1:
+            hidden_states = self.restore_output_by_local_experts(hidden_states, self.num_global_tokens_per_local_expert_cpu.t().ravel())
+
+        local_output_tokens = torch.empty((sum(self.input_splits), hidden_states.shape[-1]), dtype=hidden_states.dtype, device=hidden_states.device)
+        torch.distributed.all_to_all_single(local_output_tokens, hidden_states, self.input_splits, self.output_splits, self.ep_group)
+
+        output = torch.empty_like(local_output_tokens)
+        post_reorder_triton_kernel[(hidden_states.size(0),)](
+            hidden_states,
+            output,
+            self.src2dst,
+            topk_idx,
+            topk_weights,
+            self.start_expert_id,
+            self.end_expert_id,
+            self.top_k,
+            hidden_states.size(1),
+            BLOCK_SIZE=512,
+        )
+        return local_output_tokens

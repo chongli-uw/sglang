@@ -52,7 +52,7 @@ from sglang.srt.layers.linear import (
     RowParallelLinear,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessor
-from sglang.srt.layers.moe.ep_moe.layer import DeepEPMoE, EPMoE
+from sglang.srt.layers.moe.ep_moe.layer import DeepEPMoE, EPMoE, PplxEPMoE
 from sglang.srt.layers.moe.ep_moe.token_dispatcher import DeepEPDispatcher
 from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
 from sglang.srt.layers.moe.topk import select_experts
@@ -222,11 +222,17 @@ class DeepseekV2MoE(nn.Module):
 
         self.gate = MoEGate(config=config, prefix=add_prefix("gate", prefix))
 
-        MoEImpl = (
-            DeepEPMoE
-            if global_server_args_dict["enable_deepep_moe"]
-            else (EPMoE if global_server_args_dict["enable_ep_moe"] else FusedMoE)
-        )
+        def get_moe_impl():
+            if global_server_args_dict["enable_deepep_moe"]:
+                return DeepEPMoE
+            elif global_server_args_dict["enable_pplx_moe"]:
+                return PplxEPMoE
+            elif global_server_args_dict["enable_ep_moe"]:
+                return EPMoE
+            else:
+                return FusedMoE
+            
+        MoEImpl = get_moe_impl()
 
         self.experts = MoEImpl(
             num_experts=config.n_routed_experts + self.n_share_experts_fusion,
@@ -251,7 +257,7 @@ class DeepseekV2MoE(nn.Module):
         if config.n_shared_experts is not None and self.n_share_experts_fusion == 0:
             intermediate_size = config.moe_intermediate_size * config.n_shared_experts
             # disable tp for shared experts when enable deepep moe
-            if not global_server_args_dict["enable_deepep_moe"]:
+            if not global_server_args_dict["enable_deepep_moe"] and not global_server_args_dict["enable_pplx_moe"]:
                 self.shared_experts = DeepseekV2MLP(
                     hidden_size=config.hidden_size,
                     intermediate_size=intermediate_size,
@@ -302,11 +308,13 @@ class DeepseekV2MoE(nn.Module):
     def forward(
         self, hidden_states: torch.Tensor, forward_mode: Optional[ForwardMode] = None
     ) -> torch.Tensor:
-        if not global_server_args_dict["enable_deepep_moe"]:
-            return self.forward_normal(hidden_states)
-        else:
+        if global_server_args_dict["enable_deepep_moe"]:
             return self.forward_deepep(hidden_states, forward_mode)
-
+        elif global_server_args_dict["enable_pplx_moe"]:
+            return self.forward_pplx(hidden_states, forward_mode)
+        else:
+            return self.forward_normal(hidden_states)
+            
     def forward_normal(self, hidden_states: torch.Tensor) -> torch.Tensor:
         shared_output = self._forward_shared_experts(hidden_states)
         # router_logits: (num_tokens, n_experts)
@@ -319,6 +327,23 @@ class DeepseekV2MoE(nn.Module):
             final_hidden_states = final_hidden_states + shared_output
         if self.tp_size > 1:
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+        return final_hidden_states
+    
+    def forward_pplx(
+        self, hidden_states: torch.Tensor, forward_mode: ForwardMode
+    ) -> torch.Tensor:
+        # router_logits: (num_tokens, n_experts)
+        shared_output = None
+        if (
+            forward_mode is not None
+            and not forward_mode.is_idle()
+            and hidden_states.shape[0] > 0
+        ):
+            shared_output = self._forward_shared_experts(hidden_states)
+        router_logits = self.gate(hidden_states)
+        final_hidden_states = self.experts(hidden_states=hidden_states, router_logits=router_logits) * self.routed_scaling_factor
+        if shared_output is not None:
+            final_hidden_states = final_hidden_states + shared_output
         return final_hidden_states
 
     def forward_deepep(
