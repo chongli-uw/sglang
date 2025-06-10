@@ -153,10 +153,12 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         self, hidden_states: torch.Tensor, forward_mode: Optional[ForwardMode] = None
     ) -> torch.Tensor:
 
-        if not global_server_args_dict["enable_deepep_moe"]:
-            return self.forward_normal(hidden_states)
-        else:
+        if global_server_args_dict["enable_deepep_moe"]:
             return self.forward_deepep(hidden_states, forward_mode)
+        elif global_server_args_dict["enable_torch_a2a_moe"]:
+            return self.forward_torch_a2a(hidden_states, forward_mode)
+        else:
+            return self.forward_normal(hidden_states)
 
     def get_moe_weights(self):
         return [
@@ -177,6 +179,19 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         if self.tp_size > 1:
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
 
+        return final_hidden_states.view(num_tokens, hidden_dim)
+    
+    def forward_torch_a2a(
+        self, hidden_states: torch.Tensor, forward_mode: ForwardMode
+    ) -> torch.Tensor:
+        num_tokens, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+
+        # router_logits: (num_tokens, n_experts)
+        router_logits, _ = self.gate(hidden_states)
+        final_hidden_states = self.experts(
+            hidden_states=hidden_states, router_logits=router_logits
+        )
         return final_hidden_states.view(num_tokens, hidden_dim)
 
     def forward_deepep(
@@ -451,7 +466,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         )
         ffn_input_mode = (
             _FFNInputMode.SCATTERED
-            if (global_server_args_dict["enable_deepep_moe"] and is_sparse)
+            if ((global_server_args_dict["enable_deepep_moe"] or global_server_args_dict["enable_torch_a2a_moe"]) and is_sparse)
             or (Qwen3MoeDecoderLayer._enable_moe_dense_fully_dp() and not is_sparse)
             else _FFNInputMode.FULL
         )

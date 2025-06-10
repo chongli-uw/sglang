@@ -77,6 +77,7 @@ global_server_args_dict = {
     "disable_chunked_prefix_cache": ServerArgs.disable_chunked_prefix_cache,
     "disable_radix_cache": ServerArgs.disable_radix_cache,
     "enable_deepep_moe": ServerArgs.enable_deepep_moe,
+    "enable_torch_a2a_moe": ServerArgs.enable_torch_a2a_moe,
     "enable_dp_attention": ServerArgs.enable_dp_attention,
     "enable_dp_lm_head": ServerArgs.enable_dp_lm_head,
     "enable_ep_moe": ServerArgs.enable_ep_moe,

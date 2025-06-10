@@ -169,6 +169,7 @@ class ServerArgs:
     enable_dp_lm_head: bool = False
     enable_ep_moe: bool = False
     enable_deepep_moe: bool = False
+    enable_torch_a2a_moe: bool = False
     deepep_mode: Optional[Literal["auto", "normal", "low_latency"]] = "auto"
     ep_num_redundant_experts: int = 0
     ep_dispatch_algorithm: Optional[Literal["static", "dynamic"]] = None
@@ -1258,6 +1259,11 @@ class ServerArgs:
             "--enable-deepep-moe",
             action="store_true",
             help="Enabling DeepEP MoE implementation for EP MoE.",
+        )
+        parser.add_argument(
+            "--enable-torch-a2a-moe",
+            action="store_true",
+            help="Enabling Torch A2A MoE implementation for EP MoE.",
         )
         parser.add_argument(
             "--moe-dense-tp-size",
