@@ -503,6 +503,15 @@ def get_dataset(args, tokenizer):
             prompt_suffix=args.prompt_suffix,
             apply_chat_template=args.apply_chat_template,
         )
+    elif args.dataset_name == "dapo":
+        input_requests = sample_dapo_requests(
+            num_requests=args.num_prompts,
+            tokenizer=tokenizer,
+            max_resp_len=args.dapo_max_resp_len,
+            context_len=args.dapo_context_len,
+            prompt_suffix=args.prompt_suffix,
+            apply_chat_template=args.apply_chat_template,
+        )
     elif args.dataset_name.startswith("random"):
         input_requests = sample_random_requests(
             input_len=args.random_input_len,
@@ -844,6 +853,53 @@ def sample_sharegpt_requests(
     print(f"#Output tokens: {np.sum([x.output_len for x in filtered_dataset])}")
     return filtered_dataset
 
+def sample_dapo_requests(
+    num_requests: int,
+    tokenizer: PreTrainedTokenizerBase,
+    max_resp_len: int,
+    context_len: Optional[int] = None,
+    prompt_suffix: Optional[str] = "",
+    apply_chat_template=True,
+):
+    from datasets import load_dataset
+    dataset = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
+    dataset = dataset.shuffle(seed=42)
+
+    if apply_chat_template:
+        prompts = [tokenizer.apply_chat_template(x, add_generation_prompt=True, tokenize=False).replace(tokenizer.bos_token, "") for x in dataset["prompt"]]
+    else:
+        prompts = [x[0]["content"] for x in dataset["prompt"]]
+
+    filtered_dataset: List[DatasetRow] = []
+    for prompt in prompts:
+        if len(filtered_dataset) == num_requests:
+            break
+
+        if prompt_suffix:
+            prompt = (
+                remove_suffix(prompt, ASSISTANT_SUFFIX)
+                + prompt_suffix
+                + ASSISTANT_SUFFIX
+            )
+
+        prompt_token_ids = tokenizer.encode(prompt)
+        prompt_len = len(prompt_token_ids)
+        output_len = max_resp_len
+
+        if prompt_len < 2 or output_len < 2:
+            # Prune too short sequences.
+            continue
+
+        if context_len and prompt_len + output_len > context_len:
+            # Prune too long sequences.
+            continue
+
+        filtered_dataset.append(
+            DatasetRow(prompt=prompt, prompt_len=prompt_len, output_len=output_len)
+        )
+    print(f"#Input tokens: {np.sum([x.prompt_len for x in filtered_dataset])}")
+    print(f"#Output tokens: {np.sum([x.output_len for x in filtered_dataset])}")
+    return filtered_dataset
 
 def sample_random_requests(
     input_len: int,
@@ -1667,7 +1723,7 @@ if __name__ == "__main__":
         "--dataset-name",
         type=str,
         default="sharegpt",
-        choices=["sharegpt", "random", "random-ids", "generated-shared-prefix", "mmmu"],
+        choices=["sharegpt", "random", "random-ids", "generated-shared-prefix", "mmmu", "dapo"],
         help="Name of the dataset to benchmark on.",
     )
     parser.add_argument(
@@ -1700,6 +1756,18 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="The context length of the model for the ShareGPT dataset. Requests longer than the context length will be dropped.",
+    )
+    parser.add_argument(
+        "--dapo-max-resp-len",
+        type=int,
+        default=1024,
+        help="Output length for each request. Overrides the output length from the Dapo dataset.",
+    )
+    parser.add_argument(
+        "--dapo-context-len",
+        type=int,
+        default=None,
+        help="The context length of the model for the Dapo dataset. Requests longer than the context length will be dropped.",
     )
     parser.add_argument(
         "--random-input-len",

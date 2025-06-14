@@ -806,7 +806,7 @@ class TorchA2ADispatcher:
 
         # [ep_size, num_local_experts] -> [num_local_experts]
         self.num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(0)
-        torch.cuda.synchronize() # TODO(shaoyuw): remove this if possible, it is used to ensure the correctness of the following all_to_all_single
+        torch.cuda.synchronize() # critical
     
     def dispatch(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor, w13_input_scale: Optional[torch.Tensor]) -> torch.Tensor:
         # FIXME(shaoyuw): support fp8 quantization
