@@ -1501,7 +1501,7 @@ async def benchmark(
         if args.dataset_name.startswith("random"):
             output_file_name = f"{args.backend}_{now}_{args.num_prompts}_{args.random_input_len}_{args.random_output_len}.jsonl"
         else:
-            output_file_name = f"{args.backend}_{now}_{args.num_prompts}_sharegpt.jsonl"
+            output_file_name = f"{args.backend}_{now}_{args.num_prompts}_{args.dataset_name}.jsonl"
 
     result_details = {
         "input_lens": [output.prompt_len for output in outputs],
