@@ -1061,6 +1061,52 @@ class A2AEPMoE(EPMoE):
         final_output = self.token_dispatcher.combine(down_output, topk_ids, topk_weights)
         return final_output
 
+class PplxEPMoE(EPMoE):
+    """
+    MoE Expert Parallel Impl based on Perplexity all-to-all kernels
+    """
+
+    def __init__(
+        self,
+        num_experts: int,
+        top_k: int,
+        hidden_size: int,
+        intermediate_size: int,
+        layer_id: int,
+        params_dtype: Optional[torch.dtype] = None,
+        renormalize: bool = True,
+        use_grouped_topk: bool = False,
+        num_expert_group: Optional[int] = None,
+        num_fused_shared_experts: int = 0,
+        topk_group: Optional[int] = None,
+        quant_config: Optional[QuantizationConfig] = None,
+        tp_size: Optional[int] = None,
+        prefix: str = "",
+        correction_bias: Optional[torch.Tensor] = None,
+        custom_routing_function: Optional[Callable] = None,
+        activation: str = "silu",
+        routed_scaling_factor: Optional[float] = None,
+    ):
+        super().__init__(
+            num_experts=num_experts,
+            top_k=top_k,
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+            layer_id=layer_id,
+            params_dtype=params_dtype,
+            renormalize=renormalize,
+            use_grouped_topk=use_grouped_topk,
+            num_expert_group=num_expert_group,
+            num_fused_shared_experts=num_fused_shared_experts,
+            topk_group=topk_group,
+            quant_config=quant_config,
+            tp_size=tp_size,
+            prefix=prefix,
+            correction_bias=correction_bias,
+            custom_routing_function=custom_routing_function,
+            activation=activation,
+            routed_scaling_factor=routed_scaling_factor
+        )
 class DeepEPMoE(EPMoE):
     """
     MoE Expert Parallel Impl based on DeepEP (https://github.com/deepseek-ai/DeepEP/tree/main)

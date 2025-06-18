@@ -320,6 +320,7 @@ class DeepseekV2MoE(nn.Module):
             )
 
         self._enable_deepep_moe = global_server_args_dict["enable_deepep_moe"]
+        self._enable_torch_a2a_moe = global_server_args_dict["enable_torch_a2a_moe"]
 
     def get_moe_weights(self):
         return [
@@ -331,10 +332,12 @@ class DeepseekV2MoE(nn.Module):
     def forward(
         self, hidden_states: torch.Tensor, forward_batch: Optional[ForwardBatch] = None
     ) -> torch.Tensor:
-        if not self._enable_deepep_moe:
-            return self.forward_normal(hidden_states)
-        else:
+        if self._enable_deepep_moe:
             return self.forward_deepep(hidden_states, forward_batch)
+        elif self._enable_torch_a2a_moe:
+            return self.forward_torch_a2a(hidden_states, forward_batch)
+        else:
+            return self.forward_normal(hidden_states)
 
     def forward_normal(self, hidden_states: torch.Tensor) -> torch.Tensor:
         shared_output = self._forward_shared_experts(hidden_states)
@@ -349,6 +352,32 @@ class DeepseekV2MoE(nn.Module):
             final_hidden_states = final_hidden_states + shared_output
         if self.tp_size > 1:
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+        return final_hidden_states
+
+    def forward_torch_a2a(
+        self, hidden_states: torch.Tensor, forward_batch: ForwardBatch
+    ) -> torch.Tensor:
+        forward_mode = forward_batch.forward_mode
+        shared_output = None
+        if is_non_idle_and_non_empty(forward_mode, hidden_states):
+            # router_logits: (num_tokens, n_experts)
+            shared_output = self._forward_shared_experts(hidden_states)
+
+        num_tokens, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+
+        # router_logits: (num_tokens, n_experts)
+        router_logits, _ = self.gate(hidden_states)
+        final_hidden_states = self.experts(
+            hidden_states=hidden_states, router_logits=router_logits
+        )
+        if shared_output is not None:
+            x = shared_output
+            x.add_(final_hidden_states, alpha=self.routed_scaling_factor)
+            final_hidden_states = x
+        else:
+            final_hidden_states *= self.routed_scaling_factor
+
         return final_hidden_states
 
     def forward_deepep(
