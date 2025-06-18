@@ -1722,9 +1722,9 @@ class Scheduler(
         disable_cuda_graph: bool,
         spec_algorithm,
         speculative_num_draft_tokens,
-        enable_two_batch_overlap: bool,
-        enable_deepep_moe: bool,
-        deepep_mode: DeepEPMode,
+        enable_two_batch_overlap: bool = False,
+        enable_deepep_moe: bool = False,
+        deepep_mode: DeepEPMode = DeepEPMode.auto,
     ):
         # Check if other DP workers have running batches
         if local_batch is None:

@@ -787,7 +787,10 @@ class TorchA2ADispatcher:
         self.num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(0)
         torch.cuda.synchronize() # critical
     
-    def dispatch(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor, w13_input_scale: Optional[torch.Tensor]) -> torch.Tensor:
+    def dispatch(
+            self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor, 
+             use_per_token_if_dynamic: bool, w13_input_scale: Optional[torch.Tensor]
+        ) -> torch.Tensor:
         # FIXME(shaoyuw): support fp8 quantization
         self.empty_inputs = hidden_states.shape[0] == 0
         gateup_input = torch.empty(
@@ -813,7 +816,9 @@ class TorchA2ADispatcher:
                 self.top_k,
                 hidden_states.shape[1],
                 BLOCK_SIZE=512,
+                use_per_token_if_dynamic=use_per_token_if_dynamic,
             )
+
             num_local_tokens_per_expert = seg_indptr[1:] - seg_indptr[:-1]
         else:
             num_local_tokens_per_expert = torch.zeros(

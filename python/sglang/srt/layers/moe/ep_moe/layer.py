@@ -888,23 +888,24 @@ class A2AEPMoE(EPMoE):
         routed_scaling_factor: Optional[float] = None,
     ):
         super().__init__(
-            num_experts,
-            top_k,
-            hidden_size,
-            intermediate_size,
-            layer_id,
-            params_dtype,
-            renormalize,
-            use_grouped_topk,
-            num_expert_group,
-            topk_group,
-            quant_config,
-            tp_size,
-            prefix,
-            correction_bias,
-            custom_routing_function,
-            activation,
-            routed_scaling_factor,
+            num_experts=num_experts,
+            top_k=top_k,
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+            layer_id=layer_id,
+            params_dtype=params_dtype,
+            renormalize=renormalize,
+            use_grouped_topk=use_grouped_topk,
+            num_expert_group=num_expert_group,
+            num_fused_shared_experts=num_fused_shared_experts,
+            topk_group=topk_group,
+            quant_config=quant_config,
+            tp_size=tp_size,
+            prefix=prefix,
+            correction_bias=correction_bias,
+            custom_routing_function=custom_routing_function,
+            activation=activation,
+            routed_scaling_factor=routed_scaling_factor,
         )
 
         self.token_dispatcher = TorchA2ADispatcher(
@@ -974,7 +975,10 @@ class A2AEPMoE(EPMoE):
             dtype=torch.int64,
         )
         
-        gateup_input, seg_indptr_cur_rank = self.token_dispatcher.dispatch(hidden_states, topk_ids, topk_weights, self.w13_input_scale)
+        gateup_input, seg_indptr_cur_rank = self.token_dispatcher.dispatch(
+            hidden_states, topk_ids, topk_weights, 
+            self.use_per_token_if_dynamic, self.w13_input_scale
+        )
         
         # GroupGemm-0
         if gateup_input.shape[0] > 0: # critical
