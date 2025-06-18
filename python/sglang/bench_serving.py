@@ -346,7 +346,8 @@ async def async_request_truss(
 async def async_request_sglang_generate(
     request_func_input: RequestFuncInput,
     pbar: Optional[tqdm] = None,
-) -> RequestFuncOutput:
+    num_responses: int = 1,
+) -> List[RequestFuncOutput]:
     api_url = request_func_input.api_url
     prompt = request_func_input.prompt
 
@@ -354,9 +355,10 @@ async def async_request_sglang_generate(
         payload = {
             ("text" if isinstance(prompt, str) else "input_ids"): prompt,
             "sampling_params": {
-                "temperature": 0.0,
+                "temperature": 1,
                 "max_new_tokens": request_func_input.output_len,
                 "ignore_eos": not args.disable_ignore_eos,
+                "n": num_responses,
             },
             "stream": not args.disable_stream,
             "lora_path": request_func_input.lora_name,
@@ -371,14 +373,12 @@ async def async_request_sglang_generate(
 
         headers = get_auth_headers()
 
-        output = RequestFuncOutput.init_new(request_func_input)
+        outputs = [RequestFuncOutput.init_new(request_func_input) for _ in range(num_responses)]
 
-        generated_text = ""
-        output_len = request_func_input.output_len
-        ttft = 0.0
+        ttfts = [0.0] * num_responses
         st = time.perf_counter()
-        most_recent_timestamp = st
-        last_output_len = 0
+        most_recent_timestamps = [st] * num_responses
+        last_output_lens = [0] * num_responses
         try:
             async with session.post(
                 url=api_url, json=payload, headers=headers
@@ -399,45 +399,59 @@ async def async_request_sglang_generate(
                             # NOTE: Some completion API might have a last
                             # usage summary response without a token so we
                             # want to check a token was generated
-                            if "text" in data and data["text"]:
-                                timestamp = time.perf_counter()
-                                generated_text = data["text"]
-                                output_len = data["meta_info"]["completion_tokens"]
 
-                                # First token
-                                if ttft == 0.0:
-                                    ttft = time.perf_counter() - st
-                                    output.ttft = ttft
+                            def post_process_data(idx, data):
+                                output: RequestFuncOutput = outputs[idx]
+                                generated_text = ""
+                                output_len = request_func_input.output_len
 
-                                # Decoding phase
-                                else:
-                                    num_new_tokens = output_len - last_output_len
-                                    if num_new_tokens == 0:
-                                        continue
-                                    adjust_itl = (
-                                        timestamp - most_recent_timestamp
-                                    ) / num_new_tokens
-                                    output.itl.extend([adjust_itl] * num_new_tokens)
+                                if "text" in data and data["text"]:
+                                    timestamp = time.perf_counter()
+                                    generated_text = data["text"]
+                                    output_len = data["meta_info"]["completion_tokens"]
 
-                                most_recent_timestamp = timestamp
-                                last_output_len = output_len
+                                    # First token
+                                    if ttfts[idx] == 0.0:
+                                        ttfts[idx] = time.perf_counter() - st
+                                        output.ttft = ttfts[idx]
 
-                    output.generated_text = generated_text
-                    output.success = True
-                    output.latency = latency
-                    output.output_len = output_len
+                                    # Decoding phase
+                                    else:
+                                        num_new_tokens = output_len - last_output_lens[idx]
+                                        if num_new_tokens == 0:
+                                            return
+                                        adjust_itl = (
+                                            timestamp - most_recent_timestamps[idx]
+                                        ) / num_new_tokens
+                                        output.itl.extend([adjust_itl] * num_new_tokens)
+
+                                    most_recent_timestamps[idx] = timestamp
+                                    last_output_lens[idx] = output_len
+
+                                output.generated_text = generated_text
+                                output.success = True
+                                output.latency = latency
+                                output.output_len = output_len
+                            
+                            if num_responses > 1:
+                                for idx, d in enumerate(data):
+                                    post_process_data(idx, d)
+                            else:
+                                post_process_data(0, data)
                 else:
-                    output.error = response.reason or ""
-                    output.success = False
+                    for output in outputs:
+                        output.error = response.reason or ""
+                        output.success = False
         except Exception:
-            output.success = False
-            exc_info = sys.exc_info()
-            output.error = "".join(traceback.format_exception(*exc_info))
-            print(f"{output.error=}")
+            for output in outputs:
+                output.success = False
+                exc_info = sys.exc_info()
+                output.error = "".join(traceback.format_exception(*exc_info))
+            print(f"{outputs[0].error=}")
 
     if pbar:
-        pbar.update(1)
-    return output
+        pbar.update(num_responses)
+    return outputs
 
 
 async def async_request_gserver(
@@ -513,6 +527,15 @@ def get_dataset(args, tokenizer):
             tokenizer=tokenizer,
             fixed_output_len=args.sharegpt_output_len,
             context_len=args.sharegpt_context_len,
+            prompt_suffix=args.prompt_suffix,
+            apply_chat_template=args.apply_chat_template,
+        )
+    elif args.dataset_name == "dapo":
+        input_requests = sample_dapo_requests(
+            num_requests=args.num_prompts,
+            tokenizer=tokenizer,
+            max_resp_len=args.dapo_max_resp_len,
+            context_len=args.dapo_context_len,
             prompt_suffix=args.prompt_suffix,
             apply_chat_template=args.apply_chat_template,
         )
@@ -869,6 +892,53 @@ def sample_sharegpt_requests(
     print(f"#Output tokens: {np.sum([x.output_len for x in filtered_dataset])}")
     return filtered_dataset
 
+def sample_dapo_requests(
+    num_requests: int,
+    tokenizer: PreTrainedTokenizerBase,
+    max_resp_len: int,
+    context_len: Optional[int] = None,
+    prompt_suffix: Optional[str] = "",
+    apply_chat_template=True,
+):
+    from datasets import load_dataset
+    dataset = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
+    dataset = dataset.shuffle(seed=42)
+
+    if apply_chat_template:
+        prompts = [tokenizer.apply_chat_template(x, add_generation_prompt=True, tokenize=False).replace(tokenizer.bos_token, "") for x in dataset["prompt"]]
+    else:
+        prompts = [x[0]["content"] for x in dataset["prompt"]]
+
+    filtered_dataset: List[DatasetRow] = []
+    for prompt in prompts:
+        if len(filtered_dataset) == num_requests:
+            break
+
+        if prompt_suffix:
+            prompt = (
+                remove_suffix(prompt, ASSISTANT_SUFFIX)
+                + prompt_suffix
+                + ASSISTANT_SUFFIX
+            )
+
+        prompt_token_ids = tokenizer.encode(prompt)
+        prompt_len = len(prompt_token_ids)
+        output_len = max_resp_len
+
+        if prompt_len < 2 or output_len < 2:
+            # Prune too short sequences.
+            continue
+
+        if context_len and prompt_len + output_len > context_len:
+            # Prune too long sequences.
+            continue
+
+        filtered_dataset.append(
+            DatasetRow(prompt=prompt, prompt_len=prompt_len, output_len=output_len)
+        )
+    print(f"#Input tokens: {np.sum([x.prompt_len for x in filtered_dataset])}")
+    print(f"#Output tokens: {np.sum([x.output_len for x in filtered_dataset])}")
+    return filtered_dataset
 
 def sample_random_requests(
     input_len: int,
@@ -1106,6 +1176,8 @@ def calculate_metrics(
     tpots: List[float] = []
     ttfts: List[float] = []
     e2e_latencies: List[float] = []
+    for i in range(len(input_requests)):
+        total_input += input_requests[i].prompt_len
     for i in range(len(outputs)):
         if outputs[i].success:
             output_len = outputs[i].output_len
@@ -1114,14 +1186,11 @@ def calculate_metrics(
                 tokenizer.encode(outputs[i].generated_text, add_special_tokens=False)
             )
             retokenized_output_lens.append(retokenized_output_len)
-            total_input += input_requests[i].prompt_len
             if output_len > 1:
                 tpots.append((outputs[i].latency - outputs[i].ttft) / (output_len - 1))
             itls += outputs[i].itl
             ttfts.append(outputs[i].ttft)
-
             e2e_latencies.append(outputs[i].latency)
-
             completed += 1
         else:
             output_lens.append(0)
@@ -1186,9 +1255,14 @@ async def benchmark(
     pd_separated: bool = False,
     flush_cache: bool = False,
     warmup_requests: int = 1,
+    num_responses: int = 1,
 ):
+    assert "sglang" in backend, "Only sglang backend is supported for num_responses > 1"
     if backend in ASYNC_REQUEST_FUNCS:
         request_func = ASYNC_REQUEST_FUNCS[backend]
+        if "sglang" in backend:
+            from functools import partial
+            request_func = partial(request_func, num_responses=num_responses)
     else:
         raise ValueError(f"Unknown backend: {backend}")
 
@@ -1233,6 +1307,7 @@ async def benchmark(
         )
 
     warmup_outputs = await asyncio.gather(*warmup_tasks)
+    warmup_outputs = [output for sublist in warmup_outputs for output in sublist]
 
     # Check if at least one warmup request succeeded
     if warmup_requests > 0 and not any(output.success for output in warmup_outputs):
@@ -1260,7 +1335,7 @@ async def benchmark(
         if profile_output.success:
             print("Profiler started")
 
-    pbar = None if disable_tqdm else tqdm(total=len(input_requests))
+    pbar = None if disable_tqdm else tqdm(total=len(input_requests * num_responses))
 
     # Run all requests
     benchmark_start_time = time.perf_counter()
@@ -1288,7 +1363,8 @@ async def benchmark(
                 limited_request_func(request_func_input=request_func_input, pbar=pbar)
             )
         )
-    outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
+    outputs: List[List[RequestFuncOutput]] = await asyncio.gather(*tasks)
+    outputs: List[RequestFuncOutput] = [output for sublist in outputs for output in sublist]  # Flatten the list
 
     # Stop profiler
     if profile:
@@ -1442,7 +1518,7 @@ async def benchmark(
         if args.dataset_name.startswith("random"):
             output_file_name = f"{args.backend}_{now}_{args.num_prompts}_{args.random_input_len}_{args.random_output_len}.jsonl"
         else:
-            output_file_name = f"{args.backend}_{now}_{args.num_prompts}_sharegpt.jsonl"
+            output_file_name = f"{args.backend}_{now}_{args.num_prompts}_{args.dataset_name}.jsonl"
 
     result_details = {
         "input_lens": [output.prompt_len for output in outputs],
@@ -1624,6 +1700,7 @@ def run_benchmark(args_: argparse.Namespace):
             pd_separated=args.pd_separated,
             flush_cache=args.flush_cache,
             warmup_requests=args.warmup_requests,
+            num_responses=args.num_responses,
         )
     )
 
@@ -1673,7 +1750,7 @@ if __name__ == "__main__":
         "--dataset-name",
         type=str,
         default="sharegpt",
-        choices=["sharegpt", "random", "random-ids", "generated-shared-prefix", "mmmu"],
+        choices=["sharegpt", "random", "random-ids", "generated-shared-prefix", "mmmu", "dapo"],
         help="Name of the dataset to benchmark on.",
     )
     parser.add_argument(
@@ -1696,6 +1773,12 @@ if __name__ == "__main__":
         help="Number of prompts to process. Default is 1000.",
     )
     parser.add_argument(
+        "--num-responses",
+        type=int,
+        default=1,
+        help="Number of responses to generate for each request. Default is 1.",
+    )
+    parser.add_argument(
         "--sharegpt-output-len",
         type=int,
         default=None,
@@ -1706,6 +1789,18 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="The context length of the model for the ShareGPT dataset. Requests longer than the context length will be dropped.",
+    )
+    parser.add_argument(
+        "--dapo-max-resp-len",
+        type=int,
+        default=1024,
+        help="Output length for each request. Overrides the output length from the Dapo dataset.",
+    )
+    parser.add_argument(
+        "--dapo-context-len",
+        type=int,
+        default=None,
+        help="The context length of the model for the Dapo dataset. Requests longer than the context length will be dropped.",
     )
     parser.add_argument(
         "--random-input-len",

@@ -3,7 +3,7 @@ from typing import Callable, List, Optional, Tuple
 
 import einops
 import torch
-from sgl_kernel import silu_and_mul
+from sgl_kernel import silu_and_mul, gelu_and_mul
 from torch.nn import Module
 
 from sglang.srt.custom_op import CustomOp
@@ -48,6 +48,8 @@ from sglang.srt.utils import (
     is_hip,
     set_weight_attrs,
 )
+from sglang.srt.layers.moe.ep_moe.token_dispatcher import TorchA2ADispatcher
+from sglang.srt.distributed import parallel_state
 
 _is_hip = is_hip()
 
@@ -128,7 +130,6 @@ class GroupedGemmRunner(torch.nn.Module):
                 use_per_token_if_dynamic=self.use_per_token_if_dynamic,
             )
         return c
-
 
 class EPMoE(torch.nn.Module):
     """
@@ -577,7 +578,6 @@ class EPMoE(torch.nn.Module):
                 else:
                     param_data[expert_id] = loaded_weight
 
-
 class UnquantizedEPMoEMethod(FusedMoEMethodBase, CustomOp):
 
     def create_weights(
@@ -859,6 +859,207 @@ class Fp8EPMoEMethod(Fp8MoEMethod):
     ) -> torch.Tensor:
         raise NotImplementedError
 
+class A2AEPMoE(EPMoE):
+    """
+    All2All style MoE Expert Parallel Impl
+
+    NOTE: Currently hybrid EP+TP is not supported.
+    """
+
+    def __init__(
+        self,
+        num_experts: int,
+        top_k: int,
+        hidden_size: int,
+        intermediate_size: int,
+        layer_id: int,
+        params_dtype: Optional[torch.dtype] = None,
+        renormalize: bool = True,
+        use_grouped_topk: bool = False,
+        num_expert_group: Optional[int] = None,
+        num_fused_shared_experts: int = 0,
+        topk_group: Optional[int] = None,
+        quant_config: Optional[QuantizationConfig] = None,
+        tp_size: Optional[int] = None,
+        prefix: str = "",
+        correction_bias: Optional[torch.Tensor] = None,
+        custom_routing_function: Optional[Callable] = None,
+        activation: str = "silu",
+        routed_scaling_factor: Optional[float] = None,
+    ):
+        super().__init__(
+            num_experts,
+            top_k,
+            hidden_size,
+            intermediate_size,
+            layer_id,
+            params_dtype,
+            renormalize,
+            use_grouped_topk,
+            num_expert_group,
+            topk_group,
+            quant_config,
+            tp_size,
+            prefix,
+            correction_bias,
+            custom_routing_function,
+            activation,
+            routed_scaling_factor,
+        )
+
+        self.token_dispatcher = TorchA2ADispatcher(
+            num_experts, 
+            top_k,
+            self.tp_size, 
+            self.start_expert_id, 
+            self.end_expert_id + 1, 
+            parallel_state.get_tp_group().device_group,
+        )
+        
+    def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
+        return self.forward_normal(
+            hidden_states=hidden_states,
+            router_logits=router_logits,
+        )
+    
+    def forward_normal(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
+        # NOTE: must bypass customized op for zero input tensor, other wise illegal memory access will happen.
+        assert self.quant_method is not None
+        hidden_states_dtype = hidden_states.dtype
+        hidden_states_device = hidden_states.device
+
+        if self.grouped_gemm_runner is None:
+            self.grouped_gemm_runner = GroupedGemmRunner(
+                hidden_states_device,
+                use_flashinfer=False,  # TODO: use flashinfer
+            )
+
+        if self.activation_scheme == "dynamic" and not self.use_block_quant:
+            max_value = (
+                torch.max(hidden_states)
+                .repeat(self.num_experts_per_partition)
+                .to(torch.float32)
+            )
+            self.w13_input_scale = max_value / torch.finfo(self.fp8_dtype).max
+
+        if hidden_states.shape[0] > 0: # critical
+            topk_weights, topk_ids = select_experts(
+                hidden_states=hidden_states,
+                router_logits=router_logits,
+                top_k=self.top_k,
+                use_grouped_topk=self.use_grouped_topk,
+                renormalize=self.renormalize,
+                topk_group=self.topk_group,
+                num_expert_group=self.num_expert_group,
+                correction_bias=self.correction_bias,
+                custom_routing_function=self.custom_routing_function,
+                routed_scaling_factor=self.routed_scaling_factor,
+                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
+                    layer_id=self.layer_id,
+                ),
+            )
+        else:
+            topk_ids = torch.full(
+                (0, self.top_k), -1, dtype=torch.int, device=hidden_states_device
+            )
+            topk_weights = torch.empty(
+                (0, self.top_k), dtype=torch.float32, device=hidden_states_device
+            )
+        # print(f"TP rank {self.tp_rank}: hidden_states.shape {hidden_states.shape}")
+
+        weight_indices_cur_rank = torch.arange(
+            0,
+            self.num_experts_per_partition,
+            device=hidden_states_device,
+            dtype=torch.int64,
+        )
+        
+        gateup_input, seg_indptr_cur_rank = self.token_dispatcher.dispatch(hidden_states, topk_ids, topk_weights, self.w13_input_scale)
+        
+        # GroupGemm-0
+        if gateup_input.shape[0] > 0: # critical
+            gateup_output = self.grouped_gemm_runner(
+                a=gateup_input,
+                b=self.w13_weight,
+                c=None,
+                c_dtype=hidden_states_dtype,
+                batch_size=self.num_experts_per_partition,
+                weight_column_major=True,
+                seg_indptr=seg_indptr_cur_rank,
+                weight_indices=weight_indices_cur_rank,
+                use_fp8_w8a8=self.use_fp8_w8a8,
+                scale_a=self.w13_input_scale,
+                scale_b=(
+                    self.w13_weight_scale_inv
+                    if self.use_block_quant
+                    else self.w13_weight_scale
+                ),
+                block_shape=self.block_shape,
+            )
+        else:
+            gateup_output = torch.empty(
+                gateup_input.shape[0],
+                self.w13_weight.shape[1],
+                device=hidden_states_device,
+                dtype=hidden_states_dtype,
+            )
+
+        # Act
+        down_input = torch.empty(
+            gateup_output.shape[0],
+            gateup_output.shape[1] // 2,
+            device=gateup_output.device,
+            dtype=(
+                self.fp8_dtype
+                if (self.use_fp8_w8a8 and not self.use_block_quant)
+                else hidden_states_dtype
+            ),
+        )
+
+        if gateup_output.shape[0] > 0: # critical
+            if self.w2_input_scale is None and not self.use_block_quant:
+                self.w2_input_scale = torch.ones(
+                    self.num_experts_per_partition,
+                    dtype=torch.float32,
+                    device=hidden_states_device,
+                )
+
+            N = self.w13_weight.size(1)
+            if self.activation == "silu":
+                silu_and_mul(gateup_output.view(-1, N), down_input)
+            elif self.activation == "gelu":
+                gelu_and_mul(gateup_output.view(-1, N), down_input)
+            else:
+                raise ValueError(f"Unsupported activation: {self.activation=}")
+            del gateup_output
+
+        # GroupGemm-1
+        down_output = torch.empty(
+            down_input.shape[0],
+            self.w2_weight.shape[1],
+            device=hidden_states_device,
+            dtype=hidden_states_dtype,
+        )
+        if down_input.shape[0] > 0:
+            down_output = self.grouped_gemm_runner(
+                a=down_input,
+                b=self.w2_weight,
+                c=down_output,
+                batch_size=self.num_experts_per_partition,
+                weight_column_major=True,
+                seg_indptr=seg_indptr_cur_rank,
+                weight_indices=weight_indices_cur_rank,
+                use_fp8_w8a8=self.use_fp8_w8a8,
+                scale_a=self.w2_input_scale,
+                scale_b=(
+                    self.w2_weight_scale_inv
+                    if self.use_block_quant
+                    else self.w2_weight_scale
+                ),
+                block_shape=self.block_shape,
+            )
+        final_output = self.token_dispatcher.combine(down_output, topk_ids, topk_weights)
+        return final_output
 
 class DeepEPMoE(EPMoE):
     """
@@ -1265,6 +1466,8 @@ class DeepEPMoE(EPMoE):
 def get_moe_impl_class():
     if global_server_args_dict["enable_deepep_moe"]:
         return DeepEPMoE
+    if global_server_args_dict["enable_torch_a2a_moe"]:
+        return A2AEPMoE
     if global_server_args_dict["enable_ep_moe"]:
         return EPMoE
     return FusedMoE
