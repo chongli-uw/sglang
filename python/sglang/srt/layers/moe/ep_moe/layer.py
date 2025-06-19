@@ -909,6 +909,7 @@ class A2AEPMoE(EPMoE):
         )
 
         self.token_dispatcher = TorchA2ADispatcher(
+            layer_id,
             num_experts, 
             top_k,
             self.tp_size, 

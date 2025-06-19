@@ -433,7 +433,8 @@ async def async_request_sglang_generate(
                                 output.latency = latency
                                 output.output_len = output_len
                             
-                            if num_responses > 1:
+                            # TODO(shaoyuw): current metrics is deviated for streaming response, need to fix
+                            if num_responses > 1 and isinstance(data, list):
                                 for idx, d in enumerate(data):
                                     post_process_data(idx, d)
                             else:

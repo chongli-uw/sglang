@@ -728,6 +728,7 @@ class TorchA2ADispatcher:
     # FIXME(shaoyuw): FP8 quantization is not supported in TorchA2ADispatcher
     def __init__(
         self, 
+        layer_id: int,
         num_experts: int, 
         top_k: int,
         ep_size: int, 
@@ -736,6 +737,7 @@ class TorchA2ADispatcher:
         ep_group: dist.ProcessGroup,
     ):
         # expert_id range: [start_expert_id, end_expert_id)]
+        self.layer_id = layer_id
         self.num_global_experts = num_experts
         self.top_k = top_k
         self.ep_size = ep_size
@@ -767,7 +769,7 @@ class TorchA2ADispatcher:
     def preprocess(self, num_local_tokens_per_expert: torch.Tensor):
         # num_local_tokens_per_expert: [num_global_experts]
         # ep_size * num_local_experts == num_global_experts
-        self.input_splits = num_local_tokens_per_expert.view(self.ep_size, self.num_local_experts).sum(-1).to("cpu", non_blocking=True).numpy()
+        self.input_splits = num_local_tokens_per_expert.view(self.ep_size, self.num_local_experts).sum(-1).to("cpu", non_blocking=False).numpy()
 
         # [ep_size, num_global_experts]
         num_global_tokens_per_expert = torch.zeros((self.ep_size, self.num_global_experts), dtype=num_local_tokens_per_expert.dtype, device=num_local_tokens_per_expert.device)
@@ -777,15 +779,14 @@ class TorchA2ADispatcher:
         
         # [ep_size, num_global_experts] -> [ep_size, num_local_experts]
         num_global_tokens_per_local_expert = num_global_tokens_per_expert[ : , self.start_expert_id : self.end_expert_id].contiguous()
-        self.num_global_tokens_per_local_expert_cpu = num_global_tokens_per_local_expert.to("cpu", non_blocking=True)
+        self.num_global_tokens_per_local_expert_cpu = num_global_tokens_per_local_expert.to("cpu", non_blocking=False)
 
         # [ep_size, num_local_experts] -> [ep_size]
         num_global_tokens_per_rank = num_global_tokens_per_local_expert.sum(-1)
-        self.output_splits = num_global_tokens_per_rank.to("cpu", non_blocking=True).numpy()
+        self.output_splits = num_global_tokens_per_rank.to("cpu", non_blocking=False).numpy()
 
         # [ep_size, num_local_experts] -> [num_local_experts]
         self.num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(0)
-        torch.cuda.synchronize() # critical
     
     def dispatch(
             self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor, 
@@ -828,9 +829,9 @@ class TorchA2ADispatcher:
             )
 
         self.preprocess(num_local_tokens_per_expert)
-        
+        num_tokens_to_receive = sum(self.output_splits)
         # print(f"expert range: {(self.start_expert_id, self.end_expert_id)}, output_splits: {self.output_splits}, input_splits: {self.input_splits}")
-        global_input_tokens = torch.empty((sum(self.output_splits), gateup_input.shape[-1]), dtype=gateup_input.dtype, device=gateup_input.device)
+        global_input_tokens = torch.empty((num_tokens_to_receive, gateup_input.shape[-1]), dtype=gateup_input.dtype, device=gateup_input.device)
         torch.distributed.all_to_all_single(global_input_tokens, gateup_input, self.output_splits, self.input_splits, self.ep_group)
         # print(f"expert range: {(self.start_expert_id, self.end_expert_id)}, global_input_tokens: {global_input_tokens.shape}")
         if self.num_local_experts > 1 and global_input_tokens.shape[0] > 0:
@@ -867,3 +868,34 @@ class TorchA2ADispatcher:
                 BLOCK_SIZE=512,
             )
         return output
+
+# from pplx_kernels.all_to_all import AllToAll
+
+# class PplxA2A:
+
+#     def __init__(self):
+#         self.ata = AllToAll.internode(
+#             # max_num_tokens=moe.max_num_tokens,
+#             # num_experts=moe.num_experts,
+#             # experts_per_token=moe.experts_per_token,
+#             # rank=pgi.rank,
+#             # world_size=pgi.world_size,
+#             # dp_size=dp_size,
+#             # hidden_dim=moe.hidden_dim,
+#             # hidden_dim_bytes=moe.hidden_dim * moe.in_dtype.itemsize,
+#             # hidden_dim_scale_bytes=hidden_dim_scale_bytes,
+#         )
+    
+class PplxDispatcher:
+    def __init__(self, group: dist.ProcessGroup, num_experts: int, hidden_size: int):
+        self.group = group
+        self.num_experts = num_experts
+        self.hidden_size = hidden_size
+
+    def dispatch(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor):
+        # No-op for PPLX
+        return hidden_states, topk_idx
+
+    def combine(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor):
+        # No-op for PPLX
+        return hidden_states, topk_idx
