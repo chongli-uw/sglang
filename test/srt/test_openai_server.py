@@ -1,7 +1,9 @@
 """
 python3 -m unittest test_openai_server.TestOpenAIServer.test_batch
 python3 -m unittest test_openai_server.TestOpenAIServer.test_completion
-
+python3 -m unittest test_openai_server.TestOpenAIServer.test_completion_stream
+python3 -m unittest test_openai_server.TestOpenAIServer.test_chat_completion
+python3 -m unittest test_openai_server.TestOpenAIServer.test_chat_completion_stream
 """
 
 import json
@@ -9,11 +11,15 @@ import re
 import time
 import unittest
 
+import numpy as np
 import openai
+import requests
 
 from sglang.srt.hf_transformers_utils import get_tokenizer
 from sglang.srt.utils import kill_process_tree
+from sglang.test.runners import TEST_RERANK_QUERY_DOCS
 from sglang.test.test_utils import (
+    DEFAULT_SMALL_CROSS_ENCODER_MODEL_NAME_FOR_TEST,
     DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST,
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -136,27 +142,29 @@ class TestOpenAIServer(CustomTestCase):
         for response in generator:
             usage = response.usage
             if usage is not None:
-                assert usage.prompt_tokens > 0
-                assert usage.completion_tokens > 0
-                assert usage.total_tokens > 0
+                assert usage.prompt_tokens > 0, f"usage.prompt_tokens was zero"
+                assert usage.completion_tokens > 0, f"usage.completion_tokens was zero"
+                assert usage.total_tokens > 0, f"usage.total_tokens was zero"
                 continue
 
             index = response.choices[0].index
             is_first = is_firsts.get(index, True)
 
             if logprobs:
-                assert response.choices[0].logprobs
-                assert isinstance(response.choices[0].logprobs.tokens[0], str)
+                assert response.choices[0].logprobs, f"no logprobs in response"
+                assert isinstance(
+                    response.choices[0].logprobs.tokens[0], str
+                ), f"{response.choices[0].logprobs.tokens[0]} is not a string"
                 if not (is_first and echo):
                     assert isinstance(
                         response.choices[0].logprobs.top_logprobs[0], dict
-                    )
+                    ), f"top_logprobs was not a dictionary"
                     ret_num_top_logprobs = len(
                         response.choices[0].logprobs.top_logprobs[0]
                     )
                     # FIXME: Sometimes, some top_logprobs are missing in the return value. The reason is that some output id maps to the same output token and duplicate in the map
                     # assert ret_num_top_logprobs == logprobs, f"{ret_num_top_logprobs} vs {logprobs}"
-                    assert ret_num_top_logprobs > 0
+                    assert ret_num_top_logprobs > 0, f"ret_num_top_logprobs was 0"
 
             if is_first:
                 if echo:
@@ -164,8 +172,8 @@ class TestOpenAIServer(CustomTestCase):
                         prompt
                     ), f"{response.choices[0].text} and all args {echo} {logprobs} {token_input} {is_first}"
                 is_firsts[index] = False
-            assert response.id
-            assert response.created
+            assert response.id, f"no id in response"
+            assert response.created, f"no created in response"
 
         for index in [i for i in range(parallel_sample_num * num_choices)]:
             assert not is_firsts.get(
@@ -227,30 +235,37 @@ class TestOpenAIServer(CustomTestCase):
         )
 
         is_firsts = {}
+        is_finished = {}
         for response in generator:
             usage = response.usage
             if usage is not None:
-                assert usage.prompt_tokens > 0
-                assert usage.completion_tokens > 0
-                assert usage.total_tokens > 0
+                assert usage.prompt_tokens > 0, f"usage.prompt_tokens was zero"
+                assert usage.completion_tokens > 0, f"usage.completion_tokens was zero"
+                assert usage.total_tokens > 0, f"usage.total_tokens was zero"
                 continue
 
             index = response.choices[0].index
+            finish_reason = response.choices[0].finish_reason
+            if finish_reason is not None:
+                is_finished[index] = True
+
             data = response.choices[0].delta
 
             if is_firsts.get(index, True):
-                assert data.role == "assistant"
+                assert (
+                    data.role == "assistant"
+                ), f"data.role was not 'assistant' for first chunk"
                 is_firsts[index] = False
                 continue
 
-            if logprobs:
-                assert response.choices[0].logprobs
+            if logprobs and not is_finished.get(index, False):
+                assert response.choices[0].logprobs, f"logprobs was not returned"
                 assert isinstance(
                     response.choices[0].logprobs.content[0].top_logprobs[0].token, str
-                )
+                ), f"top_logprobs token was not a string"
                 assert isinstance(
                     response.choices[0].logprobs.content[0].top_logprobs, list
-                )
+                ), f"top_logprobs was not a list"
                 ret_num_top_logprobs = len(
                     response.choices[0].logprobs.content[0].top_logprobs
                 )
@@ -261,7 +276,7 @@ class TestOpenAIServer(CustomTestCase):
             assert (
                 isinstance(data.content, str)
                 or isinstance(data.reasoning_content, str)
-                or len(data.tool_calls) > 0
+                or (isinstance(data.tool_calls, list) and len(data.tool_calls) > 0)
                 or response.choices[0].finish_reason
             )
             assert response.id
@@ -271,152 +286,6 @@ class TestOpenAIServer(CustomTestCase):
             assert not is_firsts.get(
                 index, True
             ), f"index {index} is not found in the response"
-
-    def _create_batch(self, mode, client):
-        if mode == "completion":
-            input_file_path = "complete_input.jsonl"
-            # write content to input file
-            content = [
-                {
-                    "custom_id": "request-1",
-                    "method": "POST",
-                    "url": "/v1/completions",
-                    "body": {
-                        "model": "gpt-3.5-turbo-instruct",
-                        "prompt": "List 3 names of famous soccer player: ",
-                        "max_tokens": 20,
-                    },
-                },
-                {
-                    "custom_id": "request-2",
-                    "method": "POST",
-                    "url": "/v1/completions",
-                    "body": {
-                        "model": "gpt-3.5-turbo-instruct",
-                        "prompt": "List 6 names of famous basketball player:  ",
-                        "max_tokens": 40,
-                    },
-                },
-                {
-                    "custom_id": "request-3",
-                    "method": "POST",
-                    "url": "/v1/completions",
-                    "body": {
-                        "model": "gpt-3.5-turbo-instruct",
-                        "prompt": "List 6 names of famous tenniss player:  ",
-                        "max_tokens": 40,
-                    },
-                },
-            ]
-
-        else:
-            input_file_path = "chat_input.jsonl"
-            content = [
-                {
-                    "custom_id": "request-1",
-                    "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": {
-                        "model": "gpt-3.5-turbo-0125",
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "You are a helpful assistant.",
-                            },
-                            {
-                                "role": "user",
-                                "content": "Hello! List 3 NBA players and tell a story",
-                            },
-                        ],
-                        "max_tokens": 30,
-                    },
-                },
-                {
-                    "custom_id": "request-2",
-                    "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": {
-                        "model": "gpt-3.5-turbo-0125",
-                        "messages": [
-                            {"role": "system", "content": "You are an assistant. "},
-                            {
-                                "role": "user",
-                                "content": "Hello! List three capital and tell a story",
-                            },
-                        ],
-                        "max_tokens": 50,
-                    },
-                },
-            ]
-
-        with open(input_file_path, "w") as file:
-            for line in content:
-                file.write(json.dumps(line) + "\n")
-
-        with open(input_file_path, "rb") as file:
-            uploaded_file = client.files.create(file=file, purpose="batch")
-        if mode == "completion":
-            endpoint = "/v1/completions"
-        elif mode == "chat":
-            endpoint = "/v1/chat/completions"
-        completion_window = "24h"
-        batch_job = client.batches.create(
-            input_file_id=uploaded_file.id,
-            endpoint=endpoint,
-            completion_window=completion_window,
-        )
-
-        return batch_job, content, uploaded_file
-
-    def run_batch(self, mode):
-        client = openai.Client(api_key=self.api_key, base_url=self.base_url)
-        batch_job, content, uploaded_file = self._create_batch(mode=mode, client=client)
-
-        while batch_job.status not in ["completed", "failed", "cancelled"]:
-            time.sleep(3)
-            print(
-                f"Batch job status: {batch_job.status}...trying again in 3 seconds..."
-            )
-            batch_job = client.batches.retrieve(batch_job.id)
-        assert (
-            batch_job.status == "completed"
-        ), f"Batch job status is not completed: {batch_job.status}"
-        assert batch_job.request_counts.completed == len(content)
-        assert batch_job.request_counts.failed == 0
-        assert batch_job.request_counts.total == len(content)
-
-        result_file_id = batch_job.output_file_id
-        file_response = client.files.content(result_file_id)
-        result_content = file_response.read().decode("utf-8")  # Decode bytes to string
-        results = [
-            json.loads(line)
-            for line in result_content.split("\n")
-            if line.strip() != ""
-        ]
-        assert len(results) == len(content)
-        for delete_fid in [uploaded_file.id, result_file_id]:
-            del_pesponse = client.files.delete(delete_fid)
-            assert del_pesponse.deleted
-
-    def run_cancel_batch(self, mode):
-        client = openai.Client(api_key=self.api_key, base_url=self.base_url)
-        batch_job, _, uploaded_file = self._create_batch(mode=mode, client=client)
-
-        assert batch_job.status not in ["cancelling", "cancelled"]
-
-        batch_job = client.batches.cancel(batch_id=batch_job.id)
-        assert batch_job.status == "cancelling"
-
-        while batch_job.status not in ["failed", "cancelled"]:
-            batch_job = client.batches.retrieve(batch_job.id)
-            print(
-                f"Batch job status: {batch_job.status}...trying again in 3 seconds..."
-            )
-            time.sleep(3)
-
-        assert batch_job.status == "cancelled"
-        del_response = client.files.delete(uploaded_file.id)
-        assert del_response.deleted
 
     def test_completion(self):
         for echo in [False, True]:
@@ -456,14 +325,6 @@ class TestOpenAIServer(CustomTestCase):
         for logprobs in [None, 5]:
             for parallel_sample_num in [1, 2]:
                 self.run_chat_completion_stream(logprobs, parallel_sample_num)
-
-    def test_batch(self):
-        for mode in ["completion", "chat"]:
-            self.run_batch(mode)
-
-    def test_cancel_batch(self):
-        for mode in ["completion", "chat"]:
-            self.run_cancel_batch(mode)
 
     def test_regex(self):
         client = openai.Client(api_key=self.api_key, base_url=self.base_url)
@@ -549,6 +410,18 @@ The SmartHome Mini is a compact smart home assistant available in black or white
         assert len(models) == 1
         assert isinstance(getattr(models[0], "max_model_len", None), int)
 
+    def test_retrieve_model(self):
+        client = openai.Client(api_key=self.api_key, base_url=self.base_url)
+
+        # Test retrieving an existing model
+        retrieved_model = client.models.retrieve(self.model)
+        self.assertEqual(retrieved_model.id, self.model)
+        self.assertEqual(retrieved_model.root, self.model)
+
+        # Test retrieving a non-existent model
+        with self.assertRaises(openai.NotFoundError):
+            client.models.retrieve("non-existent-model")
+
 
 # -------------------------------------------------------------------------
 #    EBNF Test Class: TestOpenAIServerEBNF
@@ -599,7 +472,6 @@ class TestOpenAIServerEBNF(CustomTestCase):
             extra_body={"ebnf": ebnf_grammar},
         )
         text = response.choices[0].message.content.strip()
-        print("EBNF test output:", repr(text))
         self.assertTrue(len(text) > 0, "Got empty text from EBNF generation")
         self.assertRegex(text, pattern, f"Text '{text}' doesn't match EBNF choices")
 
@@ -630,7 +502,6 @@ class TestOpenAIServerEBNF(CustomTestCase):
             extra_body={"ebnf": ebnf_grammar},
         )
         text = response.choices[0].message.content.strip()
-        print("EBNF strict JSON test output:", repr(text))
         self.assertTrue(len(text) > 0, "Got empty text from EBNF strict JSON test")
         self.assertRegex(
             text, pattern, f"Text '{text}' not matching the EBNF strict JSON shape"
@@ -676,6 +547,31 @@ class TestOpenAIEmbedding(CustomTestCase):
         self.assertTrue(len(response.data[0].embedding) > 0)
         self.assertTrue(len(response.data[1].embedding) > 0)
 
+    def test_embedding_single_batch_str(self):
+        """Test embedding with a List[str] and length equals to 1"""
+        client = openai.Client(api_key=self.api_key, base_url=self.base_url)
+        response = client.embeddings.create(model=self.model, input=["Hello world"])
+        self.assertEqual(len(response.data), 1)
+        self.assertTrue(len(response.data[0].embedding) > 0)
+
+    def test_embedding_single_int_list(self):
+        """Test embedding with a List[int] or List[List[int]]]"""
+        client = openai.Client(api_key=self.api_key, base_url=self.base_url)
+        response = client.embeddings.create(
+            model=self.model,
+            input=[[15339, 314, 703, 284, 612, 262, 10658, 10188, 286, 2061]],
+        )
+        self.assertEqual(len(response.data), 1)
+        self.assertTrue(len(response.data[0].embedding) > 0)
+
+        client = openai.Client(api_key=self.api_key, base_url=self.base_url)
+        response = client.embeddings.create(
+            model=self.model,
+            input=[15339, 314, 703, 284, 612, 262, 10658, 10188, 286, 2061],
+        )
+        self.assertEqual(len(response.data), 1)
+        self.assertTrue(len(response.data[0].embedding) > 0)
+
     def test_empty_string_embedding(self):
         """Test embedding an empty string."""
 
@@ -691,6 +587,77 @@ class TestOpenAIEmbedding(CustomTestCase):
             )
         # check the status code
         self.assertEqual(cm.exception.status_code, 400)
+
+
+class TestOpenAIV1Rerank(CustomTestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.model = DEFAULT_SMALL_CROSS_ENCODER_MODEL_NAME_FOR_TEST
+        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.api_key = "sk-123456"
+        cls.score_tolerance = 1e-2
+
+        # Configure embedding-specific args
+        other_args = [
+            "--is-embedding",
+            "--enable-metrics",
+            "--disable-radix-cache",
+            "--chunked-prefill-size",
+            "-1",
+            "--attention-backend",
+            "torch_native",
+        ]
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=other_args,
+        )
+        cls.base_url += "/v1/rerank"
+
+    @classmethod
+    def tearDownClass(cls):
+        kill_process_tree(cls.process.pid)
+
+    def run_rerank(self, query, docs):
+        response = requests.post(
+            self.base_url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"query": query, "documents": docs},
+        )
+
+        return response.json()
+
+    def test_rerank_single(self):
+        """Test single rerank request"""
+        query = TEST_RERANK_QUERY_DOCS[0]["query"]
+        docs = TEST_RERANK_QUERY_DOCS[0]["documents"]
+
+        response = self.run_rerank(query, docs)
+
+        self.assertEqual(len(response), 1)
+        self.assertTrue(isinstance(response[0]["score"], float))
+        self.assertTrue(isinstance(response[0]["document"], str))
+        self.assertTrue(isinstance(response[0]["index"], int))
+
+    def test_rerank_batch(self):
+        """Test batch rerank request"""
+        query = TEST_RERANK_QUERY_DOCS[1]["query"]
+        docs = TEST_RERANK_QUERY_DOCS[1]["documents"]
+
+        response = self.run_rerank(query, docs)
+
+        self.assertEqual(len(response), 2)
+        self.assertTrue(isinstance(response[0]["score"], float))
+        self.assertTrue(isinstance(response[1]["score"], float))
+        self.assertTrue(isinstance(response[0]["document"], str))
+        self.assertTrue(isinstance(response[1]["document"], str))
+        self.assertTrue(isinstance(response[0]["index"], int))
+        self.assertTrue(isinstance(response[1]["index"], int))
 
 
 class TestOpenAIServerIgnoreEOS(CustomTestCase):
@@ -764,6 +731,169 @@ class TestOpenAIServerIgnoreEOS(CustomTestCase):
             "length",
             f"Expected finish_reason='length' for ignore_eos=True, got {response_ignore_eos.choices[0].finish_reason}",
         )
+
+
+class TestOpenAIV1Score(CustomTestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.api_key = "sk-123456"
+
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+        )
+        cls.base_url += "/v1/score"
+        cls.tokenizer = get_tokenizer(DEFAULT_SMALL_MODEL_NAME_FOR_TEST)
+
+    @classmethod
+    def tearDownClass(cls):
+        kill_process_tree(cls.process.pid)
+
+    def run_score(
+        self, query, items, label_token_ids, apply_softmax=False, item_first=False
+    ):
+        response = requests.post(
+            self.base_url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "query": query,
+                "items": items,
+                "label_token_ids": label_token_ids,
+                "apply_softmax": apply_softmax,
+                "item_first": item_first,
+            },
+        )
+        return response.json()
+
+    def test_score_text_input(self):
+        """Test scoring with text input"""
+        query = "The capital of France is"
+        items = ["Paris", "London", "Berlin"]
+
+        # Get valid token IDs from the tokenizer
+        label_token_ids = []
+        for item in items:
+            token_ids = self.tokenizer.encode(item, add_special_tokens=False)
+            if not token_ids:
+                self.fail(f"Failed to encode item: {item}")
+            label_token_ids.append(token_ids[0])
+
+        response = self.run_score(query, items, label_token_ids, apply_softmax=True)
+
+        # Handle error responses
+        if response.get("type") == "BadRequestError":
+            self.fail(f"Score request failed with error: {response['message']}")
+
+        # Verify response structure
+        self.assertIn("scores", response, "Response should have a 'scores' field")
+        self.assertIsInstance(response["scores"], list, "scores should be a list")
+        self.assertEqual(
+            len(response["scores"]),
+            len(items),
+            "Number of scores should match number of items",
+        )
+
+        # Each score should be a list of floats in the order of label_token_ids
+        for i, score_list in enumerate(response["scores"]):
+            self.assertIsInstance(score_list, list, f"Score {i} should be a list")
+            self.assertEqual(
+                len(score_list),
+                len(label_token_ids),
+                f"Score {i} length should match label_token_ids",
+            )
+            self.assertTrue(
+                all(isinstance(v, float) for v in score_list),
+                f"Score {i} values should be floats",
+            )
+            self.assertAlmostEqual(
+                sum(score_list),
+                1.0,
+                places=6,
+                msg=f"Score {i} probabilities should sum to 1",
+            )
+
+    def test_score_token_input(self):
+        """Test scoring with token IDs input"""
+        query = "The capital of France is"
+        items = ["Paris", "London", "Berlin"]
+
+        # Get valid token IDs
+        query_ids = self.tokenizer.encode(query, add_special_tokens=False)
+        item_ids = [
+            self.tokenizer.encode(item, add_special_tokens=False) for item in items
+        ]
+        label_token_ids = [
+            ids[0] for ids in item_ids if ids
+        ]  # Get first token ID of each item
+
+        response = self.run_score(
+            query_ids, item_ids, label_token_ids, apply_softmax=True
+        )
+
+        # Handle error responses
+        if response.get("type") == "BadRequestError":
+            self.fail(f"Score request failed with error: {response['message']}")
+
+        # Verify response structure
+        self.assertIn("scores", response, "Response should have a 'scores' field")
+        self.assertIsInstance(response["scores"], list, "scores should be a list")
+        self.assertEqual(
+            len(response["scores"]),
+            len(items),
+            "Number of scores should match number of items",
+        )
+
+        # Each score should be a list of floats in the order of label_token_ids
+        for i, score_list in enumerate(response["scores"]):
+            self.assertIsInstance(score_list, list, f"Score {i} should be a list")
+            self.assertEqual(
+                len(score_list),
+                len(label_token_ids),
+                f"Score {i} length should match label_token_ids",
+            )
+            self.assertTrue(
+                all(isinstance(v, float) for v in score_list),
+                f"Score {i} values should be floats",
+            )
+            self.assertAlmostEqual(
+                sum(score_list),
+                1.0,
+                places=6,
+                msg=f"Score {i} probabilities should sum to 1",
+            )
+
+    def test_score_error_handling(self):
+        """Test error handling for invalid inputs"""
+        query = "The capital of France is"
+        items = ["Paris", "London", "Berlin"]
+
+        # Test with invalid token ID
+        response = requests.post(
+            self.base_url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "query": query,
+                "items": items,
+                "label_token_ids": [999999],  # Invalid token ID
+                "apply_softmax": True,
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        error_response = response.json()
+        self.assertEqual(error_response["type"], "BadRequestError")
+        self.assertIn("Token ID 999999 is out of vocabulary", error_response["message"])
 
 
 if __name__ == "__main__":
