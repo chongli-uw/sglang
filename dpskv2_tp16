@@ -1,0 +1,152 @@
++ python -m sglang.bench_serving --num-prompts 1024 --dataset-name dapo --dapo-max-resp-len 512 --disable-stream
+benchmark_args=Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=None, dataset_name='dapo', dataset_path='', model=None, tokenizer=None, num_prompts=1024, num_responses=1, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=30000, dataset_name='dapo', dataset_path='', model='/fsx/checkpoints/DeepSeek-V2', tokenizer=None, num_prompts=1024, num_responses=1, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+
+#Input tokens: 154843
+#Output tokens: 524288
+Starting warmup with 1 sequences...
+Warmup completed with 1 sequences. Starting main benchmark run...
+  0%|          | 0/1024 [00:00<?, ?it/s]  0%|          | 1/1024 [01:07<19:12:05, 67.57s/it] 83%|████████▎ | 855/1024 [01:07<00:09, 18.03it/s] 100%|██████████| 1024/1024 [01:07<00:00, 15.13it/s]
+
+============ Serving Benchmark Result ============
+Backend:                                 sglang    
+Traffic request rate:                    inf       
+Max request concurrency:                 not set   
+Successful requests:                     1024      
+Benchmark duration (s):                  67.69     
+Total input tokens:                      154843    
+Total generated tokens:                  524288    
+Total generated tokens (retokenized):    521721    
+Request throughput (req/s):              15.13     
+Input token throughput (tok/s):          2287.58   
+Output token throughput (tok/s):         7745.58   
+Total token throughput (tok/s):          10033.16  
+Concurrency:                             1021.45   
+----------------End-to-End Latency----------------
+Mean E2E Latency (ms):                   67519.93  
+Median E2E Latency (ms):                 67519.66  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          67519.94  
+Median TTFT (ms):                        67519.67  
+P99 TTFT (ms):                           67651.81  
+---------------Inter-Token Latency----------------
+Mean ITL (ms):                           0.00      
+Median ITL (ms):                         0.00      
+P95 ITL (ms):                            0.00      
+P99 ITL (ms):                            0.00      
+Max ITL (ms):                            0.00      
+==================================================
++ python -m sglang.bench_serving --num-prompts 2048 --dataset-name dapo --dapo-max-resp-len 512 --disable-stream
+benchmark_args=Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=None, dataset_name='dapo', dataset_path='', model=None, tokenizer=None, num_prompts=2048, num_responses=1, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=30000, dataset_name='dapo', dataset_path='', model='/fsx/checkpoints/DeepSeek-V2', tokenizer=None, num_prompts=2048, num_responses=1, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+
+#Input tokens: 311102
+#Output tokens: 1048576
+Starting warmup with 1 sequences...
+Warmup completed with 1 sequences. Starting main benchmark run...
+  0%|          | 0/2048 [00:00<?, ?it/s]  0%|          | 1/2048 [01:08<39:10:51, 68.91s/it] 15%|█▌        | 312/2048 [01:09<04:29,  6.44it/s] 100%|██████████| 2048/2048 [01:09<00:00, 29.61it/s]
+
+============ Serving Benchmark Result ============
+Backend:                                 sglang    
+Traffic request rate:                    inf       
+Max request concurrency:                 not set   
+Successful requests:                     2048      
+Benchmark duration (s):                  69.17     
+Total input tokens:                      311102    
+Total generated tokens:                  1048576   
+Total generated tokens (retokenized):    1043526   
+Request throughput (req/s):              29.61     
+Input token throughput (tok/s):          4497.70   
+Output token throughput (tok/s):         15159.60  
+Total token throughput (tok/s):          19657.30  
+Concurrency:                             2037.48   
+----------------End-to-End Latency----------------
+Mean E2E Latency (ms):                   68813.89  
+Median E2E Latency (ms):                 68805.75  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          68813.90  
+Median TTFT (ms):                        68805.76  
+P99 TTFT (ms):                           69059.86  
+---------------Inter-Token Latency----------------
+Mean ITL (ms):                           0.00      
+Median ITL (ms):                         0.00      
+P95 ITL (ms):                            0.00      
+P99 ITL (ms):                            0.00      
+Max ITL (ms):                            0.00      
+==================================================
++ python -m sglang.bench_serving --num-prompts 4096 --dataset-name dapo --dapo-max-resp-len 512 --disable-stream
+benchmark_args=Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=None, dataset_name='dapo', dataset_path='', model=None, tokenizer=None, num_prompts=4096, num_responses=1, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=30000, dataset_name='dapo', dataset_path='', model='/fsx/checkpoints/DeepSeek-V2', tokenizer=None, num_prompts=4096, num_responses=1, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+
+#Input tokens: 623293
+#Output tokens: 2097152
+Starting warmup with 1 sequences...
+Warmup completed with 1 sequences. Starting main benchmark run...
+  0%|          | 0/4096 [00:00<?, ?it/s]  0%|          | 1/4096 [01:20<92:02:14, 80.91s/it]  2%|▏         | 94/4096 [01:21<40:32,  1.65it/s]    9%|▊         | 349/4096 [01:21<07:47,  8.01it/s] 57%|█████▋    | 2348/4096 [01:38<03:38,  8.01it/s] 57%|█████▋    | 2349/4096 [01:39<00:36, 47.71it/s] 59%|█████▉    | 2425/4096 [01:42<00:35, 46.60it/s] 61%|██████    | 2506/4096 [01:44<00:34, 45.44it/s] 63%|██████▎   | 2592/4096 [01:47<00:33, 44.35it/s] 65%|██████▌   | 2681/4096 [01:49<00:32, 43.41it/s] 68%|██████▊   | 2775/4096 [01:51<00:30, 42.83it/s] 70%|███████   | 2873/4096 [01:54<00:28, 42.58it/s] 73%|███████▎  | 2972/4096 [01:56<00:26, 42.49it/s] 74%|███████▍  | 3051/4096 [02:08<00:24, 42.49it/s] 75%|███████▍  | 3052/4096 [02:38<02:07,  8.21it/s] 75%|███████▌  | 3075/4096 [02:40<02:01,  8.39it/s] 91%|█████████ | 3724/4096 [02:40<00:11, 33.39it/s]100%|██████████| 4096/4096 [02:40<00:00, 25.46it/s]
+
+============ Serving Benchmark Result ============
+Backend:                                 sglang    
+Traffic request rate:                    inf       
+Max request concurrency:                 not set   
+Successful requests:                     4096      
+Benchmark duration (s):                  160.88    
+Total input tokens:                      623293    
+Total generated tokens:                  2097152   
+Total generated tokens (retokenized):    2087139   
+Request throughput (req/s):              25.46     
+Input token throughput (tok/s):          3874.27   
+Output token throughput (tok/s):         13035.51  
+Total token throughput (tok/s):          16909.79  
+Concurrency:                             2693.53   
+----------------End-to-End Latency----------------
+Mean E2E Latency (ms):                   105794.59 
+Median E2E Latency (ms):                 81189.17  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          105794.61 
+Median TTFT (ms):                        81189.19  
+P99 TTFT (ms):                           160222.49 
+---------------Inter-Token Latency----------------
+Mean ITL (ms):                           0.00      
+Median ITL (ms):                         0.00      
+P95 ITL (ms):                            0.00      
+P99 ITL (ms):                            0.00      
+Max ITL (ms):                            0.00      
+==================================================
++ python -m sglang.bench_serving --num-prompts 8192 --dataset-name dapo --dapo-max-resp-len 512 --disable-stream
+benchmark_args=Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=None, dataset_name='dapo', dataset_path='', model=None, tokenizer=None, num_prompts=8192, num_responses=1, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=30000, dataset_name='dapo', dataset_path='', model='/fsx/checkpoints/DeepSeek-V2', tokenizer=None, num_prompts=8192, num_responses=1, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+
+#Input tokens: 1243825
+#Output tokens: 4194304
+Starting warmup with 1 sequences...
+Warmup completed with 1 sequences. Starting main benchmark run...
+  0%|          | 0/8192 [00:00<?, ?it/s]  0%|          | 1/8192 [01:22<187:23:19, 82.36s/it]  0%|          | 28/8192 [01:22<4:45:49,  2.10s/it]   4%|▍         | 359/8192 [01:23<15:14,  8.56it/s]  29%|██▊       | 2341/8192 [01:36<11:23,  8.56it/s] 29%|██▊       | 2342/8192 [02:31<04:14, 23.01it/s] 29%|██▉       | 2372/8192 [02:33<04:16, 22.71it/s] 33%|███▎      | 2718/8192 [02:33<03:04, 29.69it/s] 43%|████▎     | 3519/8192 [02:33<01:28, 52.82it/s] 57%|█████▋    | 4646/8192 [02:46<01:07, 52.82it/s] 57%|█████▋    | 4647/8192 [02:58<01:11, 49.58it/s] 57%|█████▋    | 4710/8192 [03:00<01:12, 48.17it/s] 60%|██████    | 4952/8192 [03:07<01:11, 45.31it/s] 62%|██████▏   | 5116/8192 [03:13<01:13, 41.90it/s] 64%|██████▍   | 5229/8192 [03:16<01:11, 41.43it/s] 65%|██████▍   | 5308/8192 [03:18<01:12, 40.03it/s] 65%|██████▌   | 5348/8192 [03:29<01:11, 40.03it/s] 65%|██████▌   | 5349/8192 [04:07<05:17,  8.97it/s] 66%|██████▌   | 5375/8192 [04:10<05:12,  9.02it/s] 73%|███████▎  | 5990/8192 [04:10<01:19, 27.85it/s] 94%|█████████▍| 7710/8192 [04:23<00:07, 67.09it/s] 95%|█████████▌| 7786/8192 [04:25<00:06, 64.04it/s] 96%|█████████▌| 7874/8192 [04:27<00:05, 61.12it/s] 97%|█████████▋| 7950/8192 [04:30<00:04, 57.26it/s] 98%|█████████▊| 8037/8192 [04:32<00:02, 54.11it/s] 99%|█████████▉| 8123/8192 [04:33<00:01, 57.35it/s] 99%|█████████▉| 8149/8192 [04:34<00:00, 51.39it/s]100%|██████████| 8192/8192 [04:34<00:00, 29.82it/s]
+
+============ Serving Benchmark Result ============
+Backend:                                 sglang    
+Traffic request rate:                    inf       
+Max request concurrency:                 not set   
+Successful requests:                     8192      
+Benchmark duration (s):                  274.74    
+Total input tokens:                      1243825   
+Total generated tokens:                  4194304   
+Total generated tokens (retokenized):    4173941   
+Request throughput (req/s):              29.82     
+Input token throughput (tok/s):          4527.21   
+Output token throughput (tok/s):         15266.22  
+Total token throughput (tok/s):          19793.43  
+Concurrency:                             5074.44   
+----------------End-to-End Latency----------------
+Mean E2E Latency (ms):                   170186.94 
+Median E2E Latency (ms):                 152742.50 
+---------------Time to First Token----------------
+Mean TTFT (ms):                          170186.95 
+Median TTFT (ms):                        152742.52 
+P99 TTFT (ms):                           270897.13 
+---------------Inter-Token Latency----------------
+Mean ITL (ms):                           0.00      
+Median ITL (ms):                         0.00      
+P95 ITL (ms):                            0.00      
+P99 ITL (ms):                            0.00      
+Max ITL (ms):                            0.00      
+==================================================

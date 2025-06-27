@@ -355,10 +355,12 @@ async def async_request_sglang_generate(
         payload = {
             ("text" if isinstance(prompt, str) else "input_ids"): prompt,
             "sampling_params": {
-                "temperature": 1,
+                "temperature": 1.0,
                 "max_new_tokens": request_func_input.output_len,
                 "ignore_eos": not args.disable_ignore_eos,
                 "n": num_responses,
+                "top_p": 1.0,
+                "top_k": -1,
             },
             "stream": not args.disable_stream,
             "lora_path": request_func_input.lora_name,
@@ -396,6 +398,8 @@ async def async_request_sglang_generate(
                         else:
                             data = json.loads(chunk)
 
+                            # print(f"Data received: {data}")
+
                             # NOTE: Some completion API might have a last
                             # usage summary response without a token so we
                             # want to check a token was generated
@@ -403,12 +407,17 @@ async def async_request_sglang_generate(
                             def post_process_data(idx, data):
                                 output: RequestFuncOutput = outputs[idx]
                                 generated_text = ""
-                                output_len = request_func_input.output_len
+                                output_len = data["meta_info"]["completion_tokens"]
+
+                                # if output_len == 4096:
+                                #     print(f"Reaches max resp. {data}")
+
+                                # if output_len <= 5:
+                                #     print(f"Response too short: {data}")
 
                                 if "text" in data and data["text"]:
                                     timestamp = time.perf_counter()
                                     generated_text = data["text"]
-                                    output_len = data["meta_info"]["completion_tokens"]
 
                                     # First token
                                     if ttfts[idx] == 0.0:
@@ -433,7 +442,7 @@ async def async_request_sglang_generate(
                                 output.latency = latency
                                 output.output_len = output_len
                             
-                            # TODO(shaoyuw): current metrics is deviated for streaming response, need to fix
+                            # TODO(shaoyuw): current metrics is deviated for streaming response, need to fix. Deal with 'index' in the data received
                             if num_responses > 1 and isinstance(data, list):
                                 for idx, d in enumerate(data):
                                     post_process_data(idx, d)
@@ -452,6 +461,11 @@ async def async_request_sglang_generate(
 
     if pbar:
         pbar.update(num_responses)
+
+    # for output in outputs:
+    #     print(f"===== One response, length {output.output_len} =====")
+    #     print(f"Prompt: {prompt} \n Response: {output.generated_text}")
+
     return outputs
 
 

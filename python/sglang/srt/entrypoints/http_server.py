@@ -349,6 +349,21 @@ async def flush_cache():
         status_code=200 if ret.success else HTTPStatus.BAD_REQUEST,
     )
 
+# @app.api_route("/start_batch_recording", methods=["GET", "POST"])
+# async def start_batch_recording():
+#     """Stop recording the batch."""
+#     return Response(
+#         content="Start recording the batch.\n",
+#         status_code=200,
+#     )
+
+# @app.api_route("/stop_batch_recording", methods=["GET", "POST"])
+# async def stop_batch_recording():
+#     """Stop recording the batch."""
+#     return Response(
+#         content="Stop recording the batch.\n",
+#         status_code=200,
+#     )
 
 @app.api_route("/start_profile", methods=["GET", "POST"])
 async def start_profile_async(obj: Optional[ProfileReqInput] = None):

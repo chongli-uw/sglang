@@ -824,6 +824,9 @@ class TokenizerManager:
         if self.enable_metrics:
             self.metrics_collector.observe_one_aborted_request()
 
+    # async def start_batch_recording(self):
+    #     self.auto_create_handle_loop()
+
     async def start_profile(
         self,
         output_dir: Optional[str] = None,

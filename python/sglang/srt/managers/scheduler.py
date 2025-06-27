@@ -699,6 +699,10 @@ class Scheduler(
     @DynamicGradMode()
     def event_loop_normal(self):
         """A normal scheduler loop."""
+
+        idle_batch_cnt = 0
+        recording_max_idle_batch_cnt = 100
+
         while True:
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
@@ -715,12 +719,20 @@ class Scheduler(
                 self.new_token_ratio = self.init_new_token_ratio
                 self.maybe_sleep_on_idle()
 
+                idle_batch_cnt += 1
+                if idle_batch_cnt >= recording_max_idle_batch_cnt:
+                    self.stop_forward_step_recorder()
+                    idle_batch_cnt = 0
+
             self.last_batch = batch
 
     @DynamicGradMode()
     def event_loop_overlap(self):
         """A scheduler loop that overlaps the CPU processing and GPU computation."""
         self.result_queue = deque()
+
+        idle_batch_cnt = 0
+        recording_max_idle_batch_cnt = 100
 
         while True:
             recv_reqs = self.recv_requests()
@@ -759,6 +771,11 @@ class Scheduler(
                 self.check_memory()
                 self.new_token_ratio = self.init_new_token_ratio
                 self.maybe_sleep_on_idle()
+
+                idle_batch_cnt += 1
+                if idle_batch_cnt >= recording_max_idle_batch_cnt:
+                    self.stop_forward_step_recorder()
+                    idle_batch_cnt = 0
 
             self.last_batch = batch
 
@@ -1597,11 +1614,65 @@ class Scheduler(
         batch.prepare_for_decode()
         return batch
 
+    def is_first_rank(self) -> bool:
+        """Check if the current rank is the first rank in the TP group."""
+        return self.tp_rank == 0
+    
+    def start_forward_step_recorder(self):
+        if getattr(self, "forward_step_base_time_s", None) is None:
+            self.forward_step_base_time_s = time.time()
+            self.forward_step_lists = []
+    
+    def stop_forward_step_recorder(self):
+        if getattr(self, "forward_step_base_time_s", None) is not None:
+            if self.is_first_rank():
+                with open("forward_steps_recorder.json", "w") as f:
+                    import json
+                    json.dump(self.forward_step_lists, f, indent=2)
+            self.forward_step_base_time_s = None
+            self.forward_step_lists = []
+            self.forward_step_start_time_s = None
+            self.forwrad_step_end_time_s = None
+    
+    def record_forward_step_begin(self, batch: ScheduleBatch):
+        if not self.is_first_rank():
+            return
+        if getattr(self, "forward_step_base_time_s", None) is None:
+            self.start_forward_step_recorder()
+        self.forward_step_start_time_s = time.time()
+
+    def record_forward_step_end(self, batch: ScheduleBatch):
+        if not self.is_first_rank():
+            return
+        self.forwrad_step_end_time_s = time.time()
+        forward_step_duration = self.forwrad_step_end_time_s - self.forward_step_start_time_s
+        if not global_server_args_dict["enable_dp_attention"]:
+            forward_batch_size = batch.input_ids.shape[0]
+            is_decode = batch.forward_mode.is_decode()
+        else:
+            forward_batch_size = sum(batch.global_num_tokens)
+            is_decode = batch.global_forward_mode is not None and batch.global_forward_mode.is_decode()
+            batch.global_forward_mode = None  # Reset to None after recording. TBO is not never used.
+
+        if is_decode:
+            # NOTE(shaoyuw): only record decode steps for now.
+            self.forward_step_lists.append(
+                {
+                    "batch_size": forward_batch_size,
+                    "duration": forward_step_duration,
+                    "timestamp": self.forward_step_start_time_s - self.forward_step_base_time_s,
+                }
+            )
+
+        self.forward_step_start_time_s = None
+        self.forwrad_step_end_time_s = None
+
     def run_batch(
         self, batch: ScheduleBatch
     ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
         """Run a batch."""
         self.forward_ct += 1
+        self.record_forward_step_begin(batch)
 
         # Whether to run the profiler
         self._profile_batch_predicate(batch)
@@ -1669,6 +1740,8 @@ class Scheduler(
             ret = EmbeddingBatchResult(
                 embeddings=embeddings, bid=model_worker_batch.bid
             )
+        
+        self.record_forward_step_end(batch)
         return ret
 
     def process_batch_result(

@@ -188,7 +188,7 @@ class TboDPAttentionPreparer:
         )
 
         tbo_split_seq_index = self.local_tbo_split_seq_index if can_run_tbo else None
-        global_forward_mode = global_forward_mode if can_run_tbo else None
+        global_forward_mode = global_forward_mode
         return tbo_split_seq_index, global_forward_mode
 
     @staticmethod

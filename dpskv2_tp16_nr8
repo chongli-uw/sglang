@@ -1,0 +1,81 @@
++ for np in 2048
++ for nr in 8 16
++ run_cmd='python -m sglang.bench_serving --num-prompts 2048 --dataset-name dapo --dapo-max-resp-len 512 --disable-stream --num-responses 8'
++ python -m sglang.bench_serving --num-prompts 2048 --dataset-name dapo --dapo-max-resp-len 512 --disable-stream --num-responses 8
+benchmark_args=Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=None, dataset_name='dapo', dataset_path='', model=None, tokenizer=None, num_prompts=2048, num_responses=8, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=30000, dataset_name='dapo', dataset_path='', model='/fsx/checkpoints/DeepSeek-V2', tokenizer=None, num_prompts=2048, num_responses=8, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+
+#Input tokens: 311102
+#Output tokens: 1048576
+Starting warmup with 1 sequences...
+Warmup completed with 1 sequences. Starting main benchmark run...
+  0%|          | 0/16384 [00:00<?, ?it/s]  0%|          | 8/16384 [01:30<51:43:36, 11.37s/it] 13%|█▎        | 2080/16384 [01:31<07:22, 32.36it/s] 16%|█▌        | 2640/16384 [01:42<07:04, 32.36it/s] 16%|█▌        | 2648/16384 [02:49<13:54, 16.46it/s] 32%|███▏      | 5248/16384 [04:02<07:21, 25.20it/s] 32%|███▏      | 5280/16384 [04:04<07:22, 25.10it/s] 48%|████▊     | 7904/16384 [04:19<05:37, 25.10it/s] 48%|████▊     | 7912/16384 [05:37<05:16, 26.79it/s] 49%|████▊     | 7952/16384 [05:39<05:16, 26.65it/s] 65%|██████▍   | 10600/16384 [05:49<03:37, 26.65it/s] 65%|██████▍   | 10608/16384 [06:54<03:07, 30.75it/s] 65%|██████▍   | 10616/16384 [06:56<03:10, 30.25it/s] 81%|████████  | 13240/16384 [07:09<01:43, 30.25it/s] 81%|████████  | 13248/16384 [07:38<01:15, 41.49it/s] 81%|████████▏ | 13328/16384 [07:38<01:12, 42.35it/s] 82%|████████▏ | 13384/16384 [07:41<01:13, 41.05it/s] 82%|████████▏ | 13464/16384 [07:46<01:15, 38.72it/s] 83%|████████▎ | 13576/16384 [07:51<01:17, 36.46it/s] 84%|████████▎ | 13704/16384 [07:55<01:14, 36.20it/s] 85%|████████▍ | 13856/16384 [07:56<01:02, 40.73it/s] 85%|████████▌ | 13944/16384 [07:57<00:54, 44.79it/s] 87%|████████▋ | 14176/16384 [07:58<00:36, 60.76it/s] 87%|████████▋ | 14296/16384 [07:58<00:28, 73.32it/s] 88%|████████▊ | 14408/16384 [07:59<00:25, 76.33it/s] 88%|████████▊ | 14440/16384 [07:59<00:25, 75.91it/s] 89%|████████▉ | 14568/16384 [08:00<00:19, 91.54it/s] 90%|████████▉ | 14720/16384 [08:02<00:18, 88.52it/s] 91%|█████████ | 14888/16384 [08:03<00:13, 115.07it/s] 92%|█████████▏| 15048/16384 [08:04<00:12, 105.28it/s] 93%|█████████▎| 15224/16384 [08:05<00:08, 133.14it/s] 94%|█████████▍| 15408/16384 [08:07<00:09, 107.33it/s] 95%|█████████▌| 15608/16384 [08:10<00:07, 98.18it/s]  97%|█████████▋| 15816/16384 [08:22<00:05, 98.18it/s] 97%|█████████▋| 15824/16384 [08:45<00:35, 15.84it/s] 97%|█████████▋| 15832/16384 [08:46<00:35, 15.52it/s] 97%|█████████▋| 15848/16384 [08:48<00:35, 15.31it/s]100%|██████████| 16384/16384 [08:48<00:00, 31.02it/s]
+
+============ Serving Benchmark Result ============
+Backend:                                 sglang    
+Traffic request rate:                    inf       
+Max request concurrency:                 not set   
+Successful requests:                     16384     
+Benchmark duration (s):                  528.10    
+Total input tokens:                      311102    
+Total generated tokens:                  8388608   
+Total generated tokens (retokenized):    8348507   
+Request throughput (req/s):              31.02     
+Input token throughput (tok/s):          589.09    
+Output token throughput (tok/s):         15884.36  
+Total token throughput (tok/s):          16473.45  
+Concurrency:                             9241.01   
+----------------End-to-End Latency----------------
+Mean E2E Latency (ms):                   297865.29 
+Median E2E Latency (ms):                 339538.59 
+---------------Time to First Token----------------
+Mean TTFT (ms):                          297865.36 
+Median TTFT (ms):                        339538.66 
+P99 TTFT (ms):                           527692.46 
+---------------Inter-Token Latency----------------
+Mean ITL (ms):                           0.00      
+Median ITL (ms):                         0.00      
+P95 ITL (ms):                            0.00      
+P99 ITL (ms):                            0.00      
+Max ITL (ms):                            0.00      
+==================================================
++ for nr in 8 16
++ run_cmd='python -m sglang.bench_serving --num-prompts 2048 --dataset-name dapo --dapo-max-resp-len 512 --disable-stream --num-responses 16'
++ python -m sglang.bench_serving --num-prompts 2048 --dataset-name dapo --dapo-max-resp-len 512 --disable-stream --num-responses 16
+benchmark_args=Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=None, dataset_name='dapo', dataset_path='', model=None, tokenizer=None, num_prompts=2048, num_responses=16, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+Namespace(backend='sglang', base_url=None, host='0.0.0.0', port=30000, dataset_name='dapo', dataset_path='', model='/fsx/checkpoints/DeepSeek-V2', tokenizer=None, num_prompts=2048, num_responses=16, sharegpt_output_len=None, sharegpt_context_len=None, dapo_max_resp_len=512, dapo_context_len=None, random_input_len=1024, random_output_len=1024, random_range_ratio=0.0, request_rate=inf, max_concurrency=None, output_file=None, output_details=False, disable_tqdm=False, disable_stream=True, return_logprob=False, seed=1, disable_ignore_eos=False, extra_request_body=None, apply_chat_template=False, profile=False, lora_name=None, prompt_suffix='', pd_separated=False, flush_cache=False, warmup_requests=1, tokenize_prompt=False, gsp_num_groups=64, gsp_prompts_per_group=16, gsp_system_prompt_len=2048, gsp_question_len=128, gsp_output_len=256)
+
+#Input tokens: 311102
+#Output tokens: 1048576
+Starting warmup with 1 sequences...
+Warmup completed with 1 sequences. Starting main benchmark run...
+  0%|          | 0/32768 [00:00<?, ?it/s]  0%|          | 16/32768 [01:33<53:11:33,  5.85s/it]  7%|▋         | 2208/32768 [01:33<15:09, 33.59it/s]   8%|▊         | 2656/32768 [01:47<14:56, 33.59it/s]  8%|▊         | 2672/32768 [02:51<30:58, 16.20it/s]  9%|▊         | 2848/32768 [02:51<27:23, 18.20it/s] 16%|█▌        | 5280/32768 [03:07<25:10, 18.20it/s] 16%|█▌        | 5296/32768 [04:06<17:29, 26.17it/s] 16%|█▋        | 5344/32768 [04:08<17:25, 26.24it/s] 24%|██▍       | 7968/32768 [04:19<15:45, 26.24it/s] 24%|██▍       | 7984/32768 [05:42<15:08, 27.29it/s] 25%|██▍       | 8048/32768 [05:44<15:03, 27.35it/s] 33%|███▎      | 10672/32768 [05:57<13:27, 27.35it/s] 33%|███▎      | 10688/32768 [07:00<11:51, 31.03it/s] 33%|███▎      | 10736/32768 [07:02<11:53, 30.86it/s] 41%|████      | 13280/32768 [07:17<10:31, 30.86it/s] 41%|████      | 13296/32768 [08:15<09:54, 32.75it/s] 41%|████      | 13392/32768 [08:19<09:52, 32.69it/s] 49%|████▊     | 15968/32768 [08:29<08:33, 32.69it/s] 49%|████▉     | 15984/32768 [09:54<09:25, 29.68it/s] 49%|████▉     | 16192/32768 [09:57<09:01, 30.59it/s] 57%|█████▋    | 18656/32768 [10:07<07:41, 30.59it/s] 57%|█████▋    | 18672/32768 [11:12<07:25, 31.64it/s] 58%|█████▊    | 18896/32768 [11:15<07:02, 32.80it/s] 62%|██████▏   | 20224/32768 [11:15<04:15, 49.01it/s] 65%|██████▌   | 21392/32768 [11:27<03:52, 49.01it/s] 65%|██████▌   | 21408/32768 [12:49<07:09, 26.47it/s] 66%|██████▋   | 21760/32768 [12:52<06:20, 28.93it/s] 73%|███████▎  | 24080/32768 [13:07<05:00, 28.93it/s] 74%|███████▎  | 24096/32768 [14:06<04:46, 30.28it/s] 75%|███████▍  | 24448/32768 [14:11<04:20, 31.95it/s] 82%|████████▏ | 26784/32768 [14:27<03:07, 31.95it/s] 82%|████████▏ | 26800/32768 [14:56<02:31, 39.37it/s] 82%|████████▏ | 26896/32768 [14:57<02:25, 40.44it/s] 82%|████████▏ | 27024/32768 [15:01<02:26, 39.32it/s] 83%|████████▎ | 27136/32768 [15:02<02:15, 41.65it/s] 83%|████████▎ | 27232/32768 [15:08<02:29, 37.08it/s] 83%|████████▎ | 27344/32768 [15:08<02:12, 40.97it/s] 84%|████████▍ | 27472/32768 [15:15<02:28, 35.72it/s] 84%|████████▍ | 27600/32768 [15:15<02:01, 42.53it/s] 85%|████████▍ | 27728/32768 [15:21<02:25, 34.56it/s] 85%|████████▌ | 27856/32768 [15:22<01:52, 43.62it/s] 85%|████████▌ | 27984/32768 [15:29<02:26, 32.64it/s] 86%|████████▌ | 28128/32768 [15:29<01:44, 44.44it/s] 86%|████████▋ | 28304/32768 [15:37<02:14, 33.31it/s] 88%|████████▊ | 28752/32768 [15:46<01:41, 39.56it/s] 88%|████████▊ | 28864/32768 [15:50<01:41, 38.29it/s] 90%|████████▉ | 29392/32768 [16:02<01:22, 40.90it/s] 92%|█████████▏| 30112/32768 [16:06<00:40, 65.73it/s] 92%|█████████▏| 30208/32768 [16:08<00:38, 65.88it/s] 94%|█████████▍| 30816/32768 [16:08<00:16, 117.03it/s] 95%|█████████▍| 31008/32768 [16:10<00:16, 107.06it/s] 95%|█████████▌| 31184/32768 [16:13<00:16, 98.94it/s]  96%|█████████▌| 31328/32768 [16:15<00:16, 88.60it/s] 96%|█████████▌| 31472/32768 [16:16<00:13, 93.39it/s] 96%|█████████▋| 31552/32768 [16:18<00:13, 88.21it/s] 97%|█████████▋| 31792/32768 [16:19<00:08, 111.50it/s] 97%|█████████▋| 31840/32768 [16:20<00:09, 97.77it/s]  97%|█████████▋| 31888/32768 [16:20<00:08, 105.77it/s] 98%|█████████▊| 32096/32768 [16:22<00:06, 97.82it/s]  98%|█████████▊| 32240/32768 [16:37<00:05, 97.82it/s] 98%|█████████▊| 32256/32768 [16:45<00:26, 19.46it/s] 98%|█████████▊| 32272/32768 [16:46<00:25, 19.12it/s]100%|██████████| 32768/32768 [16:46<00:00, 55.17it/s]100%|██████████| 32768/32768 [16:46<00:00, 32.55it/s]
+
+============ Serving Benchmark Result ============
+Backend:                                 sglang    
+Traffic request rate:                    inf       
+Max request concurrency:                 not set   
+Successful requests:                     32768     
+Benchmark duration (s):                  1006.66   
+Total input tokens:                      311102    
+Total generated tokens:                  16777216  
+Total generated tokens (retokenized):    16695700  
+Request throughput (req/s):              32.55     
+Input token throughput (tok/s):          309.04    
+Output token throughput (tok/s):         16666.15  
+Total token throughput (tok/s):          16975.19  
+Concurrency:                             18155.03  
+----------------End-to-End Latency----------------
+Mean E2E Latency (ms):                   557739.96 
+Median E2E Latency (ms):                 596988.31 
+---------------Time to First Token----------------
+Mean TTFT (ms):                          557740.18 
+Median TTFT (ms):                        596988.46 
+P99 TTFT (ms):                           1005992.20
+---------------Inter-Token Latency----------------
+Mean ITL (ms):                           0.00      
+Median ITL (ms):                         0.00      
+P95 ITL (ms):                            0.00      
+P99 ITL (ms):                            0.00      
+Max ITL (ms):                            0.00      
+==================================================
