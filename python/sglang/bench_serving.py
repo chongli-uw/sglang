@@ -913,14 +913,17 @@ def sample_dapo_requests(
     max_resp_len: int,
     context_len: Optional[int] = None,
     prompt_suffix: Optional[str] = "",
-    apply_chat_template=True,
+    apply_chat_template=False,
 ):
     from datasets import load_dataset
     dataset = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
     dataset = dataset.shuffle(seed=42)
 
     if apply_chat_template:
-        prompts = [tokenizer.apply_chat_template(x, add_generation_prompt=True, tokenize=False).replace(tokenizer.bos_token, "") for x in dataset["prompt"]]
+        print(f"Applying chat template to DAPO prompts..., BOS: {tokenizer.bos_token}, EOS: {tokenizer.eos_token}")
+        prompts = [tokenizer.apply_chat_template(x, add_generation_prompt=True, tokenize=False) for x in dataset["prompt"]]
+        if tokenizer.bos_token is not None:
+            prompts = [x.replace(tokenizer.bos_token, "") for x in prompts]
     else:
         prompts = [x[0]["content"] for x in dataset["prompt"]]
 
