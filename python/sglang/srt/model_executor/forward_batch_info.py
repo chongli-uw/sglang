@@ -616,7 +616,7 @@ class ForwardBatch:
 
 
 def enable_num_token_non_padded(server_args):
-    return server_args.enable_ep_moe or server_args.enable_deepep_moe
+    return server_args.enable_ep_moe or server_args.enable_torch_a2a_moe or server_args.enable_deepep_moe
 
 
 class PPProxyTensors:
