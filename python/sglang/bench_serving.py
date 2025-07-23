@@ -920,7 +920,7 @@ def sample_dapo_requests(
     dataset = dataset.shuffle(seed=42)
 
     if apply_chat_template:
-        prompts = [tokenizer.apply_chat_template(x, add_generation_prompt=True, tokenize=False).replace(tokenizer.bos_token, "") for x in dataset["prompt"]]
+        prompts = [tokenizer.apply_chat_template(x, add_generation_prompt=True, tokenize=False) for x in dataset["prompt"]]
     else:
         prompts = [x[0]["content"] for x in dataset["prompt"]]
 
