@@ -84,7 +84,6 @@ Qwen3MoeConfig = None
 
 logger = logging.getLogger(__name__)
 
-
 class Qwen3MoeSparseMoeBlock(nn.Module):
     def __init__(
         self,
@@ -353,6 +352,41 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
     def op_output(self, state):
         state.hidden_states_mlp_output = state.pop("hidden_states_after_combine")
 
+class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
+    def __init__(
+        self,
+        layer_id: int,
+        config: Qwen3MoeConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__(layer_id, config, quant_config, prefix)
+
+        # For ParaS, we start with torch A2A EP and switch to TP at a certain point
+        assert global_server_args_dict["enable_torch_a2a_moe"] and not global_server_args_dict["enable_deepep_moe"]
+        self.ep_experts = self.experts
+        self.tp_experts = FusedMoE(
+            num_experts=config.num_experts
+            + global_server_args_dict["ep_num_redundant_experts"],
+            top_k=config.num_experts_per_tok,
+            layer_id=layer_id,
+            hidden_size=config.hidden_size,
+            intermediate_size=config.moe_intermediate_size,
+            renormalize=config.norm_topk_prob,
+            quant_config=quant_config,
+            prefix=add_prefix("experts", prefix),
+            # no deepep config
+        )
+
+        self.paralleism_config = "ep"
+
+    def forward(
+        self, hidden_states: torch.Tensor, forward_batch: Optional[ForwardBatch] = None
+    ) -> torch.Tensor:
+        if self.paralleism_config == "ep":
+            return self.forward_torch_a2a(hidden_states, forward_batch)
+        else:
+            return self.forward_normal(hidden_states)
 
 class Qwen3MoeAttention(nn.Module):
     def __init__(
@@ -551,7 +585,8 @@ class Qwen3MoeDecoderLayer(nn.Module):
         )
 
         if self.is_layer_sparse:
-            self.mlp = Qwen3MoeSparseMoeBlock(
+            qwen3_moe_impl_class = Qwen3MoeSparseMoeBlockParaS if global_server_args_dict["enable_paras_moe"] else Qwen3MoeSparseMoeBlock
+            self.mlp = qwen3_moe_impl_class(
                 layer_id=self.layer_id,
                 config=config,
                 quant_config=quant_config,
@@ -575,6 +610,60 @@ class Qwen3MoeDecoderLayer(nn.Module):
             input_layernorm=self.input_layernorm,
             post_attention_layernorm=self.post_attention_layernorm,
         )
+
+        if global_server_args_dict["enable_paras_moe"]:
+            # NOTE(shaoyuw): after ParaS, we should initialize the communicator
+            self.paras_ep_layer_communicator = None
+            self.paras_tp_layer_communicator = None
+            self.paras_ep_layer_scatter_modes = None
+            self.paras_tp_layer_scatter_modes = None
+
+    def paras_ep_to_tp(self):
+        # Switch from EP to TP
+        assert global_server_args_dict["enable_paras_moe"]
+
+        # save previous ep context
+        self.paras_ep_layer_scatter_modes = self.layer_scatter_modes
+        self.paras_ep_layer_communicator = self.layer_communicator
+
+        # hack global configs and parallel states
+        global_server_args_dict["enable_torch_a2a_moe"] = False
+
+        # TODO(shaoyuw): hack parallel states
+        
+        # build new tp context
+        if not self.paras_tp_layer_scatter_modes:
+            self.paras_tp_layer_scatter_modes = LayerScatterModes.init_new(
+                layer_id=self.layer_id,
+                num_layers=self.config.num_hidden_layers,
+                is_layer_sparse=self.is_layer_sparse,
+                is_previous_layer_sparse=True, # all layers are sparse for Qwen3-MoE
+            )
+            assert not self.paras_tp_layer_communicator
+            self.paras_tp_layer_communicator = LayerCommunicator(
+                layer_scatter_modes=self.paras_tp_layer_scatter_modes,
+                input_layernorm=self.input_layernorm,
+                post_attention_layernorm=self.post_attention_layernorm,
+            )
+
+        # hack the layer scatter modes and communicator
+        assert self.paras_tp_layer_scatter_modes
+        assert self.paras_tp_layer_communicator
+        self.layer_scatter_modes = self.paras_tp_layer_scatter_modes
+        self.layer_communicator = self.paras_tp_layer_communicator
+
+    def paras_tp_to_ep(self):
+        # Switch from TP to EP
+        assert global_server_args_dict["enable_paras_moe"]
+
+        # hack global configs and parallel states
+        global_server_args_dict["enable_torch_a2a_moe"] = True
+
+        # revert to ep context
+        assert self.paras_ep_layer_scatter_modes is not None, "EP scatter modes are not initialized"
+        assert self.paras_ep_layer_communicator is not None, "EP communication context is not initialized"
+        self.layer_scatter_modes = self.paras_ep_layer_scatter_modes
+        self.layer_communicator = self.paras_ep_layer_communicator
 
     def forward(
         self,

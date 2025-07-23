@@ -102,6 +102,9 @@ class TpModelWorkerClient:
 
     def get_attention_tp_cpu_group(self):
         return self.worker.get_attention_tp_cpu_group()
+    
+    def get_paras_tp_group(self):
+        return self.worker.get_paras_tp_group()
 
     def get_memory_pool(self):
         return (

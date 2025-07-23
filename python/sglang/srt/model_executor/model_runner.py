@@ -46,6 +46,7 @@ from sglang.srt.layers.dp_attention import (
     initialize_dp_attention,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+from sglang.srt.layers.paras_parallel_state import initialize_paras_parallel, get_paras_dp_group, get_paras_tp_group
 from sglang.srt.layers.quantization import (
     deep_gemm_wrapper,
     monkey_patch_isinstance_for_vllm_base_layer,
@@ -479,6 +480,12 @@ class ModelRunner:
                 moe_dense_tp_size=self.server_args.moe_dense_tp_size,
                 pp_size=self.server_args.pp_size,
             )
+            if global_server_args_dict["enable_paras_moe"]:
+                initialize_paras_parallel(
+                    dp_size=self.tp_size * self.pp_size // 8,
+                    tp_size=8,
+                    global_rank=self.tp_rank,
+                )
 
         min_per_gpu_memory = get_available_gpu_memory(
             self.device,
@@ -488,6 +495,12 @@ class ModelRunner:
         )
         self.tp_group = get_tp_group()
         self.attention_tp_group = get_attention_tp_group()
+        if global_server_args_dict["enable_paras_moe"]:
+            self.paras_dp_group = get_paras_dp_group()
+            self.paras_tp_group = get_paras_tp_group()
+        else:
+            self.paras_dp_group = None
+            self.paras_tp_group = None
 
         # Check memory for tensor parallelism
         local_gpu_memory = get_available_gpu_memory(self.device, self.gpu_id)
@@ -508,7 +521,7 @@ class ModelRunner:
             f"Init torch distributed ends. mem usage={(before_avail_memory - local_gpu_memory):.2f} GB"
         )
         return min_per_gpu_memory
-
+    
     def load_model(self):
         before_avail_memory = get_available_gpu_memory(self.device, self.gpu_id)
         logger.info(
