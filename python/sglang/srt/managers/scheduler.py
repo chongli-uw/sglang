@@ -318,6 +318,12 @@ class Scheduler(
             nccl_port=port_args.nccl_port,
         )
 
+        # NOTE(shaoyuw): for debug use
+        # if self.tp_rank == 0:
+        #     print(f"model params:")
+        #     for name, params in self.tp_worker.worker.model_runner.model.named_parameters():
+        #         print(f"{name}: {params.shape}")
+
         # Launch a draft worker for speculative decoding
         if self.spec_algorithm.is_eagle():
             from sglang.srt.speculative.eagle_worker import EAGLEWorker
@@ -351,13 +357,22 @@ class Scheduler(
             global_server_args_dict["max_micro_batch_size"] = max(
                 self.max_running_requests // server_args.pp_size, 1
             )
-
+        
+        # global parallel config
         self.tp_group = self.tp_worker.get_tp_group()
         self.tp_cpu_group = self.tp_group.cpu_group
         self.attn_tp_group = self.tp_worker.get_attention_tp_group()
         self.attn_tp_cpu_group = self.tp_worker.get_attention_tp_cpu_group()
         self.pp_group = get_pp_group()
         self.world_group = get_world_group()
+        
+        # ParaS parallel config
+        if server_args.enable_paras_moe:
+            self.paras_tp_group = self.tp_worker.get_paras_tp_group()
+            self.paras_tp_cpu_group = self.paras_tp_group.cpu_group
+            self.paras_ep_size = self.tp_size
+            self.paras_ep_group = self.tp_group
+            self.paras_ep_cpu_group = self.tp_cpu_group
 
         self.pad_input_ids_func = self.tp_worker.get_pad_input_ids_func()
         global_server_args_dict.update(worker_global_server_args_dict)
@@ -507,6 +522,8 @@ class Scheduler(
             self.server_args.disaggregation_mode
         )
         self.init_disaggregation()
+
+        self.paras_switched_to_tp = False
 
     def maybe_sleep_on_idle(self):
         if self.idle_sleeper is not None:
@@ -696,6 +713,26 @@ class Scheduler(
             # The prefill requests that are in the middle of kv sending
             self.disagg_prefill_inflight_queue: List[Req] = []
 
+    def paras_tp_configure(self, paras_tp_size):
+        # switch from EP to DP x TP
+        self.paras_switched_to_tp = True
+        self.server_args.enable_dp_attention = False
+
+        # drop-in replacement for scheduler tp configs 
+        self.tp_size = paras_tp_size
+        self.tp_group = self.paras_tp_group
+        self.tp_cpu_group = self.paras_tp_cpu_group
+
+    def paras_ep_configure(self, paras_ep_size):
+        # switch from TP to EP
+        self.paras_switched_to_tp = False
+        self.server_args.enable_dp_attention = True
+        # drop-in replacement for scheduler ep configs
+
+        self.tp_size = self.paras_ep_size
+        self.tp_group = self.paras_ep_group
+        self.tp_cpu_group = self.paras_ep_cpu_group
+
     @DynamicGradMode()
     def event_loop_normal(self):
         """A normal scheduler loop."""
@@ -734,12 +771,22 @@ class Scheduler(
         idle_batch_cnt = 0
         recording_max_idle_batch_cnt = 100
 
+        trigger_parallelism_switch = False
+
         while True:
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
 
-            batch = self.get_next_batch_to_run()
-            self.cur_batch = batch
+            if trigger_parallelism_switch:
+                pass
+
+            # Hack for parallelism switch
+            continue_loop = True
+            if continue_loop:
+                batch = self.get_next_batch_to_run()
+                self.cur_batch = batch
+            else:
+                batch = None
 
             if batch:
                 batch.launch_done = threading.Event()
