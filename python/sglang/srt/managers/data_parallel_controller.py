@@ -103,6 +103,21 @@ class DataParallelController:
                 )
 
         self.max_req_input_len = None
+        self.paras_worker_init()
+
+    def paras_worker_init(self):
+        self.paras_ep_workers = self.workers
+        self.paras_tp_workers = self.workers[:: self.server_args.paras_tp_size]
+        self.paras_ep_ctrl_msg_step = self.control_message_step
+        self.paras_tp_ctrl_msg_step = self.control_message_step
+
+    def paras_tp_configure(self):
+        self.workers = self.paras_tp_workers
+        self.control_message_step = self.server_args.paras_tp_size
+
+    def paras_ep_configure(self):
+        self.workers = self.paras_ep_workers
+        self.control_message_step = self.paras_ep_ctrl_msg_step
 
     def launch_dp_schedulers(self, server_args, port_args):
         base_gpu_id = 0
@@ -249,8 +264,9 @@ class DataParallelController:
     def round_robin_scheduler(self, req: Req):
         if self.server_args.disaggregation_mode == "null":
             if req.data_parallel_rank is not None:
-                logger.debug(f"Direct routing to DP rank {req.data_parallel_rank}")
-                self.workers[req.data_parallel_rank].send_pyobj(req)
+                routed_rank = req.data_parallel_rank % len(self.workers)
+                logger.debug(f"Direct routing to DP rank {req.data_parallel_rank}, re-directed to {routed_rank}")
+                self.workers[routed_rank].send_pyobj(req)
             else:
                 self.workers[self.round_robin_counter].send_pyobj(req)
                 self.round_robin_counter = (self.round_robin_counter + 1) % len(

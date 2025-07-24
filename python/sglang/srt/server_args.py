@@ -169,6 +169,7 @@ class ServerArgs:
     deepep_config: Optional[str] = None
     moe_dense_tp_size: Optional[int] = None
     enable_paras_moe: bool = False
+    paras_tp_size: Optional[int] = None
 
     # Double Sparsity
     enable_double_sparsity: bool = False
@@ -1254,6 +1255,12 @@ class ServerArgs:
             action="store_true",
             help="Enabling ParaS MoE implementation for EP MoE.",
         )
+        parser.add_argument(
+            "--paras-tp-size",
+            type=int,
+            default=ServerArgs.paras_tp_size,
+            help="TP size for ParaS MoE layers.",
+        )
 
         # Double Sparsity
         parser.add_argument(
@@ -1637,7 +1644,14 @@ class ServerArgs:
                     self.lora_paths[name] = path
                 else:
                     self.lora_paths[lora_path] = lora_path
+            
+        self.check_paras_config()
 
+    def check_paras_config(self):
+        if self.paras_tp_size is not None:
+            assert self.enable_paras_moe, "paras_tp_size is only valid when enable_paras_moe is set"
+        elif self.enable_paras_moe:
+            self.paras_tp_size = self.tp_size # set to world size by default
 
 def prepare_server_args(argv: List[str]) -> ServerArgs:
     """

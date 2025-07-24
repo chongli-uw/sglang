@@ -365,14 +365,6 @@ class Scheduler(
         self.attn_tp_cpu_group = self.tp_worker.get_attention_tp_cpu_group()
         self.pp_group = get_pp_group()
         self.world_group = get_world_group()
-        
-        # ParaS parallel config
-        if server_args.enable_paras_moe:
-            self.paras_tp_group = self.tp_worker.get_paras_tp_group()
-            self.paras_tp_cpu_group = self.paras_tp_group.cpu_group
-            self.paras_ep_size = self.tp_size
-            self.paras_ep_group = self.tp_group
-            self.paras_ep_cpu_group = self.tp_cpu_group
 
         self.pad_input_ids_func = self.tp_worker.get_pad_input_ids_func()
         global_server_args_dict.update(worker_global_server_args_dict)
@@ -522,8 +514,7 @@ class Scheduler(
             self.server_args.disaggregation_mode
         )
         self.init_disaggregation()
-
-        self.paras_switched_to_tp = False
+        self.init_paras_config()
 
     def maybe_sleep_on_idle(self):
         if self.idle_sleeper is not None:
@@ -713,25 +704,63 @@ class Scheduler(
             # The prefill requests that are in the middle of kv sending
             self.disagg_prefill_inflight_queue: List[Req] = []
 
-    def paras_tp_configure(self, paras_tp_size):
+    def init_paras_config(self):
+        if not self.server_args.enable_paras_moe:
+            return
+        
+        # ParaS config
+        self.paras_tp_size = self.server_args.paras_tp_size
+        self.paras_tp_rank = self.tp_rank % self.paras_tp_size
+        self.paras_dp_size = self.tp_size // self.paras_tp_size
+        self.paras_dp_rank = self.tp_rank // self.paras_tp_size
+        self.paras_tp_group = self.tp_worker.get_paras_tp_group()
+        self.paras_tp_cpu_group = self.paras_tp_group.cpu_group
+        self.paras_ep_size = self.tp_size
+        self.paras_dp_size = self.tp_rank
+        self.paras_ep_group = self.tp_group
+        self.paras_ep_cpu_group = self.tp_cpu_group
+        self.paras_parallelism_config = "EP"
+
+    def paras_tp_configure(self):
+        assert self.server_args.enable_paras_moe, "ParaS parallelism is not enabled."
         # switch from EP to DP x TP
-        self.paras_switched_to_tp = True
+        self.paras_parallelism_config = "TP"
         self.server_args.enable_dp_attention = False
 
         # drop-in replacement for scheduler tp configs 
-        self.tp_size = paras_tp_size
+        self.tp_size = self.paras_tp_size
+        self.tp_rank = self.paras_tp_rank
         self.tp_group = self.paras_tp_group
         self.tp_cpu_group = self.paras_tp_cpu_group
 
-    def paras_ep_configure(self, paras_ep_size):
-        # switch from TP to EP
-        self.paras_switched_to_tp = False
-        self.server_args.enable_dp_attention = True
-        # drop-in replacement for scheduler ep configs
+        # NOTE(shaoyuw): attn_dp_rank should be dealt with more carefully. 
+        #                But now it seems to be used only a few times.
+        self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
+            self.paras_tp_rank,
+            self.paras_tp_size,
+            self.paras_dp_rank,
+        )
 
+    def paras_ep_configure(self):
+        assert self.server_args.enable_paras_moe, "ParaS parallelism is not enabled."
+        # switch from TP to EP
+        self.paras_parallelism_config = "EP"
+        self.server_args.enable_dp_attention = True
+
+        # drop-in replacement for scheduler ep configs
         self.tp_size = self.paras_ep_size
+        self.tp_rank = self.paras_ep_rank
         self.tp_group = self.paras_ep_group
         self.tp_cpu_group = self.paras_ep_cpu_group
+
+        self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
+            compute_dp_attention_world_info(
+                self.server_args.enable_dp_attention,
+                self.tp_rank,
+                self.tp_size,
+                self.dp_size,
+            )
+        )
 
     @DynamicGradMode()
     def event_loop_normal(self):
