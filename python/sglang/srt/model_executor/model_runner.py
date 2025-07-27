@@ -109,6 +109,10 @@ from sglang.srt.utils import (
     set_cpu_offload_max_bytes,
     set_cuda_arch,
 )
+from sglang.srt.layers.paras_parallel_state import (
+    paras_comm_configure_tp,
+    paras_comm_configure_ep,
+)
 
 _is_hip = is_hip()
 
@@ -481,9 +485,11 @@ class ModelRunner:
                 pp_size=self.server_args.pp_size,
             )
             if global_server_args_dict["enable_paras_moe"]:
+                world_size = self.tp_size * self.pp_size
+                paras_tp_size = global_server_args_dict["paras_tp_size"]
                 initialize_paras_parallel(
-                    dp_size=self.tp_size * self.pp_size // 8,
-                    tp_size=8,
+                    dp_size=world_size // paras_tp_size,
+                    tp_size=paras_tp_size,
                     global_rank=self.tp_rank,
                 )
 
@@ -1336,6 +1342,42 @@ class ModelRunner:
         )
         ShardedStateLoader.save_model(self.model, path, pattern, max_size)
 
+    def paras_configure_helper(self):
+        # reconfigure token_to_kv_pool_allocator
+        assert isinstance(self.token_to_kv_pool_allocator, TokenToKVPoolAllocator)
+        self.max_total_num_tokens = self.token_to_kv_pool.paras_get_num_kv_slots()
+        self.token_to_kv_pool_allocator.paras_resize_and_clear(self.max_total_num_tokens)
+
+        if self.server_args.max_running_requests is None:
+            if max_num_reqs is None:
+                max_num_reqs = min(
+                    max(
+                        int(
+                            self.max_total_num_tokens / self.model_config.context_len * 512
+                        ),
+                        2048,
+                    ),
+                    4096,
+                )
+        self.req_to_token_pool.paras_resize_and_clear(max_num_reqs)
+
+    def paras_configure_tp(self, paras_tp_size: int):
+        assert not self.use_mla_backend, (
+            "ParaS does not support MLA backend yet. "
+        )
+        assert isinstance(self.token_to_kv_pool, MHATokenToKVPool)
+        self.token_to_kv_pool.paras_configure_tp(paras_tp_size)
+        paras_comm_configure_tp()
+        self.paras_configure_helper()
+
+    def paras_configure_ep(self):
+        assert not self.use_mla_backend, (
+            "ParaS does not support MLA backend yet. "
+        )
+        assert isinstance(self.token_to_kv_pool, MHATokenToKVPool)
+        self.token_to_kv_pool.paras_configure_ep()
+        paras_comm_configure_ep()
+        self.paras_configure_helper()
 
 def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
     params_dict = dict(model.named_parameters())

@@ -60,6 +60,7 @@ class TpModelWorker:
         token_to_kv_pool_allocator: Optional[TokenToKVPoolAllocator] = None,
     ):
         # Parse args
+        self.server_args = server_args
         self.tp_size = server_args.tp_size
         self.tp_rank = tp_rank
         self.pp_rank = pp_rank
@@ -116,15 +117,7 @@ class TpModelWorker:
         # Profile number of tokens
         self.max_total_num_tokens = self.model_runner.max_total_num_tokens
         self.max_prefill_tokens = server_args.max_prefill_tokens
-        self.max_running_requests = min(
-            (
-                self.max_total_num_tokens // 2
-                if server_args.max_running_requests is None
-                else server_args.max_running_requests
-                // (server_args.dp_size if server_args.enable_dp_attention else 1)
-            ),
-            self.model_runner.req_to_token_pool.size,
-        )
+        self.max_running_requests = self.model_runner.req_to_token_pool.size
         assert self.max_running_requests > 0, "max_running_request is zero"
         self.max_req_len = min(
             self.model_config.context_len - 1,
@@ -268,3 +261,25 @@ class TpModelWorker:
             recv_req.name, recv_req.truncate_size
         )
         return parameter
+    
+    def paras_configure_helper(self):
+        # helper function to configure worker info
+        self.max_total_num_tokens = self.model_runner.max_total_num_tokens
+        self.max_running_requests = self.model_runner.req_to_token_pool.size
+        assert self.max_running_requests > 0, "max_running_request is zero"
+        self.max_req_len = min(
+            self.model_config.context_len - 1,
+            self.max_total_num_tokens - 1,
+        )
+        self.max_req_input_len = self.max_req_len - 5
+        assert (
+            self.max_req_len > 0 and self.max_req_input_len > 0
+        ), "Memory pool size is too small"
+
+    def paras_configure_tp(self, paras_tp_size: int):
+        self.model_runner.paras_configure_tp(paras_tp_size)
+        self.paras_configure_helper()
+
+    def paras_configure_ep(self):
+        self.model_runner.paras_configure_ep()
+        self.paras_configure_helper()

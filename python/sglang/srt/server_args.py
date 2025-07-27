@@ -169,7 +169,7 @@ class ServerArgs:
     deepep_config: Optional[str] = None
     moe_dense_tp_size: Optional[int] = None
     enable_paras_moe: bool = False
-    paras_tp_size: Optional[int] = None
+    paras_tp_size: Optional[int] = 4
 
     # Double Sparsity
     enable_double_sparsity: bool = False

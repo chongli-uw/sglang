@@ -122,7 +122,7 @@ def initialize_paras_parallel(
     )
 
     
-def paras_ep_to_tp():
+def paras_comm_configure_tp():
     global _TP
     _TP = _PARAS_TP
 
@@ -136,7 +136,7 @@ def paras_ep_to_tp():
     _LOCAL_ATTN_DP_SIZE = 1
     _LOCAL_ATTN_DP_RANK = 0
 
-def paras_tp_to_ep():
+def paras_comm_configure_ep():
     # TODO(shaoyuw): adapt for moe dense tp
     global _TP
     _TP = _PARAS_EP

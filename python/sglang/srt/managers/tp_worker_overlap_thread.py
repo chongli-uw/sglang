@@ -263,3 +263,22 @@ class TpModelWorkerClient:
     def __delete__(self):
         self.input_queue.put((None, None))
         self.copy_queue.put((None, None, None))
+
+    def para_configure_helper(self):
+        pass
+
+    def paras_configure_tp(self, paras_tp_size: int):
+        """
+        Configure the worker for ParaS TP mode.
+        This will reshape the kv cache and update the worker info.
+        """
+        self.worker.paras_configure_tp(paras_tp_size)
+        self.worker.paras_configure_helper()
+    
+    def paras_configure_ep(self):
+        """
+        Configure the worker for ParaS EP mode.
+        This will reshape the kv cache and update the worker info.
+        """
+        self.worker.paras_configure_ep()
+        self.worker.paras_configure_helper()

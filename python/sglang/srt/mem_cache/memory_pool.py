@@ -89,6 +89,15 @@ class ReqToTokenPool:
     def clear(self):
         self.free_slots = list(range(self.size))
 
+    def paras_resize_and_clear(self, new_size: int):
+        if self.size == new_size:
+            self.clear()
+            return
+        self.size = new_size
+        self.clear()
+        self.req_to_token = torch.zeros(
+            (self.size, self.max_context_len), dtype=torch.int32, device=self.device
+        )
 
 class KVCache(abc.ABC):
     @abc.abstractmethod
@@ -230,7 +239,12 @@ class TokenToKVPoolAllocator:
 
     def load_cpu_copy(self, kv_cache_cpu, indices):
         return self._kvcache.load_cpu_copy(kv_cache_cpu, indices)
-
+    
+    def paras_resize_and_clear(self, new_size: int):
+        if self.size == new_size:
+            return
+        self.size = new_size
+        self.clear()
 
 class MHATokenToKVPool(KVCache):
 
@@ -474,7 +488,49 @@ class MHATokenToKVPool(KVCache):
             next_power_of_2(len(tgt_loc)),
         )
 
+    def paras_post_configure(self):
+        self.data_ptrs = torch.tensor(
+            [x.data_ptr() for x in self.k_buffer + self.v_buffer],
+            dtype=torch.uint64,
+            device=self.device,
+        )
+        self.data_strides = torch.tensor(
+            [
+                np.prod(x.shape[1:]) * x.dtype.itemsize
+                for x in self.k_buffer + self.v_buffer
+            ],
+            device=self.device,
+        )
+        self.size = self.k_buffer[0].shape[0] - self.page_size
 
+    def paras_configure_tp(self, paras_tp_size: int):
+        # ParaS: Reshape kv cache from EP to TP.
+        # It does not intrusively change the number of heads, just increases the number of slots by reshapin kv cache.
+        sharded_head_num = self.head_num // paras_tp_size
+        for i in range(self.layer_num):
+            self.k_buffer[i] = self.k_buffer[i].reshape(
+                (-1, sharded_head_num, self.head_dim)
+            )
+            self.v_buffer[i] = self.v_buffer[i].reshape(
+                (-1, sharded_head_num, self.head_dim)
+            )
+        self.paras_post_configure()
+
+    def paras_configure_ep(self):
+        # ParaS: Reshape kv cache from TP to EP.
+        for i in range(self.layer_num):
+            self.k_buffer[i] = self.k_buffer[i].reshape(
+                (-1, self.head_num, self.head_dim)
+            )
+            self.v_buffer[i] = self.v_buffer[i].reshape(
+                (-1, self.head_num, self.head_dim)
+            )
+        self.paras_post_configure()
+
+    def paras_get_num_kv_slots(self):
+        # ParaS: Get the number of kv slots in each layer.
+        return self.size
+    
 @triton.jit
 def set_mla_kv_buffer_kernel(
     kv_buffer_ptr,

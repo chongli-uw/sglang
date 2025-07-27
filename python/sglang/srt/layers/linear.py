@@ -831,7 +831,7 @@ class QKVParallelLinear(ColumnParallelLinear):
             tp_size=tp_size,
             use_presharded_weights=self.use_presharded_weights,
         )
-
+        
     def _get_shard_offset_mapping(self, loaded_shard_id: str):
         shard_offset_mapping = {
             "q": 0,
@@ -1121,7 +1121,58 @@ class QKVParallelLinear(ColumnParallelLinear):
 
         assert param_data.shape == loaded_weight.shape
         param_data.copy_(loaded_weight)
+    
+    def paras_configure_helper(self):
+        self.num_heads = divide(self.total_num_heads, self.tp_size)
+        self.num_kv_heads = divide(self.total_num_kv_heads, self.tp_size)
+        self.num_kv_head_replicas = 1
+        self.q_proj_shard_size = self.num_heads * self.head_size
+        self.kv_proj_shard_size = self.num_kv_heads * self.head_size
 
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        """
+        Shard the weights for tensor parallelism.
+        """
+        assert paras_tp_size <= self.num_kv_heads
+        tp_num_heads = self.total_num_heads // paras_tp_size
+        tp_num_kv_heads = self.total_num_kv_heads // paras_tp_size
+
+        tp_head_start = paras_tp_rank * tp_num_heads
+        tp_head_end = tp_head_start + tp_num_heads
+        tp_k_head_start = self.total_num_heads + paras_tp_rank * tp_num_kv_heads
+        tp_k_head_end = tp_k_head_start + tp_num_kv_heads
+        tp_v_head_start = (
+            self.total_num_heads + self.total_num_kv_heads
+            + paras_tp_rank * tp_num_kv_heads
+        )
+        tp_v_head_end = tp_v_head_start + tp_num_kv_heads
+
+        # TODO(shaoyuw): Can we drop full weight?
+        self.full_weight = self.weight
+        self.weight = torch.column_stack((
+            self.full_weight[:, tp_head_start:tp_head_end], 
+            self.full_weight[:, tp_k_head_start:tp_k_head_end],
+            self.full_weight[:, tp_v_head_start:tp_v_head_end]
+        ))
+
+        if self.bias is not None:
+            self.full_bias = self.bias
+            self.bias = torch.column_stack((
+                self.full_bias[tp_head_start:tp_head_end],
+                self.full_bias[tp_k_head_start:tp_k_head_end],
+                self.full_bias[tp_v_head_start:tp_v_head_end]
+            ))
+
+        self.tp_size = paras_tp_size
+        self.tp_rank = paras_tp_rank
+        self.paras_configure_helper()
+
+    def paras_configure_ep(self):
+        self.tp_size = 1
+        self.tp_rank = 0
+        self.weight = self.full_weight
+        self.bias = self.full_bias if self.bias is not None else None
+        self.paras_configure_helper()
 
 class RowParallelLinear(LinearBase):
     """Linear layer with row parallelism.
@@ -1301,3 +1352,23 @@ class RowParallelLinear(LinearBase):
         s += f", tp_size={self.tp_size}"
         s += f", reduce_results={self.reduce_results}"
         return s
+
+    def paras_configure_helper(self):
+        self.input_size_per_partition = divide(self.input_size, self.tp_size)
+    
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        input_size_per_partition = divide(self.input_size, paras_tp_size)
+        row_start = paras_tp_rank * input_size_per_partition
+        row_end = row_start + input_size_per_partition
+
+        self.full_weight = self.weight
+        self.weight = self.full_weight[row_start:row_end, :]
+        self.tp_size = paras_tp_size
+        self.tp_rank = paras_tp_rank
+        self.paras_configure_helper()
+
+    def paras_configure_ep(self):
+        self.tp_size = 1
+        self.tp_rank = 0
+        self.weight = self.full_weight
+        self.paras_configure_helper()

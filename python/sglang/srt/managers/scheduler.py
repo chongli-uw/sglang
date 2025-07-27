@@ -721,7 +721,7 @@ class Scheduler(
         self.paras_ep_cpu_group = self.tp_cpu_group
         self.paras_parallelism_config = "EP"
 
-    def paras_tp_configure(self):
+    def paras_configure_tp(self):
         assert self.server_args.enable_paras_moe, "ParaS parallelism is not enabled."
         # switch from EP to DP x TP
         self.paras_parallelism_config = "TP"
@@ -741,7 +741,7 @@ class Scheduler(
             self.paras_dp_rank,
         )
 
-    def paras_ep_configure(self):
+    def paras_configure_ep(self):
         assert self.server_args.enable_paras_moe, "ParaS parallelism is not enabled."
         # switch from TP to EP
         self.paras_parallelism_config = "EP"
