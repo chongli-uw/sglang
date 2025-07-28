@@ -35,6 +35,7 @@ import triton.language as tl
 
 from sglang.srt.layers.radix_attention import RadixAttention
 from sglang.srt.utils import debug_timing, is_cuda, next_power_of_2
+from sglang.srt.paras.utils import paras_func
 
 logger = logging.getLogger(__name__)
 
@@ -488,7 +489,7 @@ class MHATokenToKVPool(KVCache):
             next_power_of_2(len(tgt_loc)),
         )
 
-    def paras_post_configure(self):
+    def paras_configure_helper(self):
         self.data_ptrs = torch.tensor(
             [x.data_ptr() for x in self.k_buffer + self.v_buffer],
             dtype=torch.uint64,
@@ -503,7 +504,8 @@ class MHATokenToKVPool(KVCache):
         )
         self.size = self.k_buffer[0].shape[0] - self.page_size
 
-    def paras_configure_tp(self, paras_tp_size: int):
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         # ParaS: Reshape kv cache from EP to TP.
         # It does not intrusively change the number of heads, just increases the number of slots by reshapin kv cache.
         sharded_head_num = self.head_num // paras_tp_size
@@ -514,8 +516,8 @@ class MHATokenToKVPool(KVCache):
             self.v_buffer[i] = self.v_buffer[i].reshape(
                 (-1, sharded_head_num, self.head_dim)
             )
-        self.paras_post_configure()
 
+    @paras_func
     def paras_configure_ep(self):
         # ParaS: Reshape kv cache from TP to EP.
         for i in range(self.layer_num):
@@ -525,7 +527,6 @@ class MHATokenToKVPool(KVCache):
             self.v_buffer[i] = self.v_buffer[i].reshape(
                 (-1, self.head_num, self.head_dim)
             )
-        self.paras_post_configure()
 
     def paras_get_num_kv_slots(self):
         # ParaS: Get the number of kv slots in each layer.

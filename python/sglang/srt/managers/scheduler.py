@@ -153,6 +153,7 @@ from sglang.srt.utils import (
     suppress_other_loggers,
 )
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
+from sglang.srt.paras.utils import paras_func
 
 logger = logging.getLogger(__name__)
 
@@ -721,6 +722,7 @@ class Scheduler(
         self.paras_ep_cpu_group = self.tp_cpu_group
         self.paras_parallelism_config = "EP"
 
+    @paras_func
     def paras_configure_tp(self):
         assert self.server_args.enable_paras_moe, "ParaS parallelism is not enabled."
         # switch from EP to DP x TP
@@ -741,6 +743,7 @@ class Scheduler(
             self.paras_dp_rank,
         )
 
+    @paras_func
     def paras_configure_ep(self):
         assert self.server_args.enable_paras_moe, "ParaS parallelism is not enabled."
         # switch from TP to EP

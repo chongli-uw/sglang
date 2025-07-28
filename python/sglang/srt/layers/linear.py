@@ -31,6 +31,7 @@ from sglang.srt.layers.quantization.base_config import (
     QuantizeMethodBase,
 )
 from sglang.srt.utils import set_weight_attrs
+from sglang.srt.paras.utils import paras_func
 
 logger = logging.getLogger(__name__)
 
@@ -1129,6 +1130,7 @@ class QKVParallelLinear(ColumnParallelLinear):
         self.q_proj_shard_size = self.num_heads * self.head_size
         self.kv_proj_shard_size = self.num_kv_heads * self.head_size
 
+    @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         """
         Shard the weights for tensor parallelism.
@@ -1165,14 +1167,13 @@ class QKVParallelLinear(ColumnParallelLinear):
 
         self.tp_size = paras_tp_size
         self.tp_rank = paras_tp_rank
-        self.paras_configure_helper()
 
+    @paras_func
     def paras_configure_ep(self):
         self.tp_size = 1
         self.tp_rank = 0
         self.weight = self.full_weight
         self.bias = self.full_bias if self.bias is not None else None
-        self.paras_configure_helper()
 
 class RowParallelLinear(LinearBase):
     """Linear layer with row parallelism.
@@ -1356,6 +1357,7 @@ class RowParallelLinear(LinearBase):
     def paras_configure_helper(self):
         self.input_size_per_partition = divide(self.input_size, self.tp_size)
     
+    @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         input_size_per_partition = divide(self.input_size, paras_tp_size)
         row_start = paras_tp_rank * input_size_per_partition
@@ -1365,10 +1367,9 @@ class RowParallelLinear(LinearBase):
         self.weight = self.full_weight[row_start:row_end, :]
         self.tp_size = paras_tp_size
         self.tp_rank = paras_tp_rank
-        self.paras_configure_helper()
 
+    @paras_func
     def paras_configure_ep(self):
         self.tp_size = 1
         self.tp_rank = 0
         self.weight = self.full_weight
-        self.paras_configure_helper()

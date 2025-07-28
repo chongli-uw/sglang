@@ -40,6 +40,7 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTe
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import MultiprocessingSerializer, broadcast_pyobj, set_random_seed
+from sglang.srt.paras.utils import paras_func
 
 logger = logging.getLogger(__name__)
 
@@ -276,10 +277,10 @@ class TpModelWorker:
             self.max_req_len > 0 and self.max_req_input_len > 0
         ), "Memory pool size is too small"
 
-    def paras_configure_tp(self, paras_tp_size: int):
-        self.model_runner.paras_configure_tp(paras_tp_size)
-        self.paras_configure_helper()
-
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        self.model_runner.paras_configure_tp(paras_tp_size, paras_tp_rank)
+        
+    @paras_func
     def paras_configure_ep(self):
         self.model_runner.paras_configure_ep()
-        self.paras_configure_helper()

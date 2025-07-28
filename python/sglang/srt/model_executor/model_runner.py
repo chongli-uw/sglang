@@ -46,7 +46,7 @@ from sglang.srt.layers.dp_attention import (
     initialize_dp_attention,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
-from sglang.srt.layers.paras_parallel_state import initialize_paras_parallel, get_paras_dp_group, get_paras_tp_group
+from sglang.srt.paras.paras_parallel_state import initialize_paras_parallel, get_paras_dp_group, get_paras_tp_group
 from sglang.srt.layers.quantization import (
     deep_gemm_wrapper,
     monkey_patch_isinstance_for_vllm_base_layer,
@@ -109,10 +109,11 @@ from sglang.srt.utils import (
     set_cpu_offload_max_bytes,
     set_cuda_arch,
 )
-from sglang.srt.layers.paras_parallel_state import (
+from sglang.srt.paras.paras_parallel_state import (
     paras_comm_configure_tp,
     paras_comm_configure_ep,
 )
+from sglang.srt.paras.utils import paras_func
 
 _is_hip = is_hip()
 
@@ -1361,15 +1362,22 @@ class ModelRunner:
                 )
         self.req_to_token_pool.paras_resize_and_clear(max_num_reqs)
 
-    def paras_configure_tp(self, paras_tp_size: int):
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         assert not self.use_mla_backend, (
             "ParaS does not support MLA backend yet. "
         )
         assert isinstance(self.token_to_kv_pool, MHATokenToKVPool)
-        self.token_to_kv_pool.paras_configure_tp(paras_tp_size)
+        self.token_to_kv_pool.paras_configure_tp(paras_tp_size, paras_tp_rank)
         paras_comm_configure_tp()
-        self.paras_configure_helper()
 
+        from sglang.srt.models.qwen3_moe import Qwen3MoeForCausalLM
+        assert isinstance(self.model, Qwen3MoeForCausalLM), (
+            "ParaS only supports Qwen3MoeForCausalLM model for now."
+        )
+        self.model.paras_configure_tp(paras_tp_size, paras_tp_rank)
+
+    @paras_func
     def paras_configure_ep(self):
         assert not self.use_mla_backend, (
             "ParaS does not support MLA backend yet. "
@@ -1377,7 +1385,6 @@ class ModelRunner:
         assert isinstance(self.token_to_kv_pool, MHATokenToKVPool)
         self.token_to_kv_pool.paras_configure_ep()
         paras_comm_configure_ep()
-        self.paras_configure_helper()
 
 def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
     params_dict = dict(model.named_parameters())

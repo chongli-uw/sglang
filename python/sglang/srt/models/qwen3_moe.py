@@ -79,6 +79,7 @@ from sglang.srt.models.qwen2_moe import Qwen2MoeMLP as Qwen3MoeMLP
 from sglang.srt.models.qwen2_moe import Qwen2MoeModel
 from sglang.srt.two_batch_overlap import MaybeTboDeepEPDispatcher
 from sglang.srt.utils import DeepEPMode, add_prefix, is_non_idle_and_non_empty
+from sglang.srt.paras.utils import paras_func
 
 Qwen3MoeConfig = None
 
@@ -538,19 +539,19 @@ class Qwen3MoeAttention(nn.Module):
         self.num_heads = self.total_num_heads // self.attn_tp_size
         self.num_kv_heads = self.total_num_kv_heads // self.attn_tp_size
 
+    @paras_func
     def paras_configure_tp(self, paras_tp_size, paras_tp_rank):
         self.attn_tp_rank = paras_tp_rank
         self.attn_tp_size = paras_tp_size
         self.qkv_proj.paras_configure_tp(paras_tp_size, paras_tp_rank)
         self.o_proj.paras_configure_tp(paras_tp_size, paras_tp_rank)
-        self.paras_configure_helper()
 
+    @paras_func
     def paras_configure_ep(self):
         self.attn_tp_size = 1
         self.attn_tp_rank = 0
         self.qkv_proj.paras_configure_ep()
         self.o_proj.paras_configure_ep()
-        self.paras_configure_helper()
 
 class Qwen3MoeDecoderLayer(nn.Module):
     def __init__(
@@ -640,6 +641,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
     def paras_configure_helper(self):
         pass
 
+    @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         # Switch from EP to TP
         assert global_server_args_dict["enable_paras_moe"]
@@ -677,6 +679,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         self.attn_tp_rank = paras_tp_rank
         self.local_dp_size = 1
 
+    @paras_func
     def paras_configure_ep(self):
         # Switch from TP to EP
         assert global_server_args_dict["enable_paras_moe"]
@@ -800,6 +803,18 @@ class Qwen3MoeModel(Qwen2MoeModel):
             prefix=prefix,
             decoder_layer_type=Qwen3MoeDecoderLayer,
         )
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        for layer in self.layers:
+            assert isinstance(layer, Qwen3MoeDecoderLayer), "Layer is not Qwen3MoeDecoderLayer"
+            layer.paras_configure_tp(paras_tp_size, paras_tp_rank)
+
+    @paras_func
+    def paras_configure_ep(self):
+        for layer in self.layers:
+            assert isinstance(layer, Qwen3MoeDecoderLayer), "Layer is not Qwen3MoeDecoderLayer"
+            layer.paras_configure_ep()
 
 
 class Qwen3MoeForCausalLM(nn.Module):
@@ -960,6 +975,19 @@ class Qwen3MoeForCausalLM(nn.Module):
             num_logical_experts=config.num_experts,
             num_groups=None,
         )
+    
+    def paras_configure_helper(self):
+        pass
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        self.model.paras_configure_tp(paras_tp_size, paras_tp_rank)
+        # self.lm_head.paras_configure_tp(paras_tp_size, paras_tp_rank)
+
+    @paras_func
+    def paras_configure_ep(self):
+        self.model.paras_configure_ep()
+        # self.lm_head.paras_configure_ep()
 
 
 EntryClass = Qwen3MoeForCausalLM
