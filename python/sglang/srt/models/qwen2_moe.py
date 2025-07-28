@@ -403,7 +403,7 @@ class Qwen2MoeModel(nn.Module):
             self.embed_tokens = VocabParallelEmbedding(
                 config.vocab_size,
                 config.hidden_size,
-                enable_tp=not global_server_args_dict["enable_dp_attention"],
+                enable_tp=False,
                 prefix=add_prefix("embed_tokens", prefix),
             )
         else:

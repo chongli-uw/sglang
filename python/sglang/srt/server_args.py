@@ -380,9 +380,10 @@ class ServerArgs:
             )
 
         if self.enable_dp_lm_head:
-            assert (
-                self.enable_dp_attention
-            ), "Please enable dp attention when setting enable_dp_attention. "
+            pass
+            # assert (
+            #     self.enable_dp_attention
+            # ), "Please enable dp attention when setting enable_dp_attention. "
 
         # DeepEP MoE
         self.enable_sp_layernorm = False

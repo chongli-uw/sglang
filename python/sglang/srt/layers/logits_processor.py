@@ -25,6 +25,7 @@ from torch import nn
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_gather,
+    get_tensor_model_parallel_rank,
 )
 from sglang.srt.layers.dp_attention import (
     attn_tp_all_gather,
@@ -465,7 +466,11 @@ class LogitsProcessor(nn.Module):
                 )
                 logits = global_logits
             else:
+                if get_tensor_model_parallel_rank() == 0:
+                    print("logits before tensor model parallel all gather:", logits.shape)
                 logits = tensor_model_parallel_all_gather(logits)
+                if get_tensor_model_parallel_rank() == 0:
+                    print("logits after tensor model parallel all gather:", logits.shape)
 
         if self.do_tensor_parallel_all_gather_dp_attn:
             logits, global_logits = (
