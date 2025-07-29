@@ -169,7 +169,7 @@ class ServerArgs:
     deepep_config: Optional[str] = None
     moe_dense_tp_size: Optional[int] = None
     enable_paras_moe: bool = False
-    paras_tp_size: Optional[int] = 4
+    paras_tp_size: int = 4
 
     # Double Sparsity
     enable_double_sparsity: bool = False
@@ -1648,10 +1648,10 @@ class ServerArgs:
         self.check_paras_config()
 
     def check_paras_config(self):
-        if self.paras_tp_size is not None:
-            assert self.enable_paras_moe, "paras_tp_size is only valid when enable_paras_moe is set"
-        elif self.enable_paras_moe:
-            self.paras_tp_size = self.tp_size # set to world size by default
+        if self.enable_paras_moe:
+            assert self.enable_dp_lm_head, "enable_dp_lm_head must be set when enable_paras_moe is set"
+            assert self.enable_dp_attention, "enable_dp_attention must be set when enable_paras_moe is set"
+            assert self.paras_tp_size > 0, "paras_tp_size must be positive when enable_paras_moe is set"
 
 def prepare_server_args(argv: List[str]) -> ServerArgs:
     """

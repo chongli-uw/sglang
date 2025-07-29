@@ -806,6 +806,11 @@ class Qwen3MoeModel(Qwen2MoeModel):
 
     @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        """
+        Configure the model for tensor parallelism (TP).
+        Note(shaoyuw): the embedding layer is set to DP, but it works for TP as well. 
+                       There is no need to modify it.
+        """
         for layer in self.layers:
             assert isinstance(layer, Qwen3MoeDecoderLayer), "Layer is not Qwen3MoeDecoderLayer"
             layer.paras_configure_tp(paras_tp_size, paras_tp_rank)
@@ -981,6 +986,11 @@ class Qwen3MoeForCausalLM(nn.Module):
 
     @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        """
+        Configure the model for tensor parallelism (TP).
+        Note(shaoyuw): the LMHead and logit processor are set to DP with enable_dp_lm_head=True,
+                       but they work for TP as well. There is no need to modify them.
+        """
         self.model.paras_configure_tp(paras_tp_size, paras_tp_rank)
         # self.lm_head.paras_configure_tp(paras_tp_size, paras_tp_rank)
 
