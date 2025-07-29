@@ -389,6 +389,21 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
         else:
             return self.forward_normal(hidden_states)
 
+    def paras_configure_helper(self):
+        pass
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        self.paralleism_config = "tp"
+        self.tp_size = paras_tp_size
+        self.experts = self.tp_experts
+
+    @paras_func
+    def paras_configure_ep(self):
+        self.paralleism_config = "ep"
+        self.tp_size = 1
+        self.experts = self.ep_experts
+
 class Qwen3MoeAttention(nn.Module):
     def __init__(
         self,
@@ -654,6 +669,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         global_server_args_dict["enable_torch_a2a_moe"] = False
         
         self.self_attn.paras_configure_tp(paras_tp_size, paras_tp_rank)
+        self.mlp.paras_configure_tp(paras_tp_size, paras_tp_rank)
 
         # build new tp context
         if not self.paras_tp_layer_scatter_modes:
@@ -688,6 +704,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         global_server_args_dict["enable_torch_a2a_moe"] = True
 
         self.self_attn.paras_configure_ep()
+        self.mlp.paras_configure_ep()
 
         # revert to ep context
         assert self.paras_ep_layer_scatter_modes is not None, "EP scatter modes are not initialized"
