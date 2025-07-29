@@ -228,6 +228,15 @@ class LogitsProcessor(nn.Module):
             "debug_tensor_dump_output_folder", None
         )
 
+        if get_tensor_model_parallel_rank() == 0:
+            print(
+                f"LogitsProcessor: do_tensor_parallel_all_gather: {self.do_tensor_parallel_all_gather}, "
+                f"do_tensor_parallel_all_gather_dp_attn: {self.do_tensor_parallel_all_gather_dp_attn}, "
+                f"use_attn_tp_group: {self.use_attn_tp_group}, "
+                f"attn_tp_size: {self.attn_tp_size}, "
+                f"final_logit_softcapping: {self.final_logit_softcapping}"
+            )
+
     def forward(
         self,
         input_ids,
@@ -320,6 +329,8 @@ class LogitsProcessor(nn.Module):
 
         # Compute logits for both input and sampled tokens.
         logits = self._get_logits(pruned_states, lm_head, logits_metadata)
+        if get_tensor_model_parallel_rank() == 0:
+            print(f"logits shape: {logits.shape}, logits stride: {logits.stride()}")
         sampled_logits = (
             logits[sample_indices] if sample_indices is not None else logits
         )

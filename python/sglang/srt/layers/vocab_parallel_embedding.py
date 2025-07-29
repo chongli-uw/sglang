@@ -237,7 +237,6 @@ class VocabParallelEmbedding(torch.nn.Module):
                 tp_rank = get_tensor_model_parallel_rank()
                 self.tp_size = get_tensor_model_parallel_world_size()
         else:
-            assert use_attn_tp_group is False
             tp_rank = 0
             self.tp_size = 1
 
@@ -534,6 +533,7 @@ class ParallelLMHead(VocabParallelEmbedding):
         padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        enable_tp: bool = True,
         use_attn_tp_group: bool = False,
         use_presharded_weights: bool = False,
     ):
@@ -546,6 +546,7 @@ class ParallelLMHead(VocabParallelEmbedding):
             quant_config=quant_config,
             prefix=prefix,
             use_attn_tp_group=use_attn_tp_group,
+            enable_tp=enable_tp,
             use_presharded_weights=use_presharded_weights,
         )
         self.quant_config = quant_config

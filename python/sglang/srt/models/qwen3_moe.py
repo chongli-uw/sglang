@@ -703,9 +703,10 @@ class Qwen3MoeForCausalLM(nn.Module):
             config.hidden_size,
             quant_config=quant_config,
             prefix=add_prefix("lm_head", prefix),
-            use_attn_tp_group=global_server_args_dict["enable_dp_lm_head"],
+            enable_tp=not global_server_args_dict["enable_dp_lm_head"],
+            # use_attn_tp_group=global_server_args_dict["enable_dp_lm_head"],
         )
-        self.logits_processor = LogitsProcessor(config)
+        self.logits_processor = LogitsProcessor(config, skip_all_gather=global_server_args_dict["enable_dp_lm_head"])
 
     @torch.no_grad()
     def forward(
