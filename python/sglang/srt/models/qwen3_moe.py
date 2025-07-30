@@ -649,10 +649,9 @@ class Qwen3MoeDecoderLayer(nn.Module):
         )
 
         if global_server_args_dict["enable_paras_moe"]:
-            # NOTE(shaoyuw): after ParaS, we should initialize the communicator
-            self.paras_ep_layer_communicator = None
+            self.paras_ep_layer_communicator = self.layer_communicator
+            self.paras_ep_layer_scatter_modes = self.layer_scatter_modes
             self.paras_tp_layer_communicator = None
-            self.paras_ep_layer_scatter_modes = None
             self.paras_tp_layer_scatter_modes = None
 
     def paras_configure_helper(self):
@@ -667,9 +666,6 @@ class Qwen3MoeDecoderLayer(nn.Module):
         self.paras_ep_layer_scatter_modes = self.layer_scatter_modes
         self.paras_ep_layer_communicator = self.layer_communicator
 
-        # hack global configs and parallel states
-        global_server_args_dict["enable_torch_a2a_moe"] = False
-        
         self.self_attn.paras_configure_tp(paras_tp_size, paras_tp_rank)
         self.mlp.paras_configure_tp(paras_tp_size, paras_tp_rank)
 
@@ -702,9 +698,6 @@ class Qwen3MoeDecoderLayer(nn.Module):
         # Switch from TP to EP
         assert global_server_args_dict["enable_paras_moe"]
 
-        # hack global configs and parallel states
-        global_server_args_dict["enable_torch_a2a_moe"] = True
-
         self.self_attn.paras_configure_ep()
         self.mlp.paras_configure_ep()
 
@@ -736,6 +729,8 @@ class Qwen3MoeDecoderLayer(nn.Module):
                 hidden_states=hidden_states,
                 forward_batch=forward_batch,
             )
+            # if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
+            #         logger.info(f"After attention layer {self.layer_id}: hidden_states: {hidden_states[:1, :4]}, residual: {residual[:1, :4]}")
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
@@ -746,6 +741,9 @@ class Qwen3MoeDecoderLayer(nn.Module):
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
+
+        # if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
+        #     logger.info(f"After moe layer {self.layer_id}: hidden_states: {hidden_states[:1, :4]}, residual: {residual[:1, :4]}")
 
         return hidden_states, residual
 
