@@ -114,7 +114,7 @@ class DataParallelController:
         self.paras_tp_ctrl_msg_step = 1
 
     def paras_configure_helper(self):
-        pass
+        self.round_robin_counter = self.round_robin_counter % len(self.workers)
 
     @paras_func
     def paras_tp_configure(self):

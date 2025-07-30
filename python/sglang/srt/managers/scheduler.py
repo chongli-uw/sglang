@@ -766,7 +766,9 @@ class Scheduler(
         # switch from EP to DP x TP
         self.paras_parallelism_config = "TP"
         self.server_args.enable_dp_attention = False
+        self.server_args.enable_torch_a2a_moe = False
         global_server_args_dict["enable_dp_attention"] = False
+        global_server_args_dict["enable_torch_a2a_moe"] = False
 
         self.tp_worker.paras_configure_tp(self.paras_tp_size, self.paras_tp_rank)
 
@@ -795,7 +797,9 @@ class Scheduler(
         # switch from TP to EP
         self.paras_parallelism_config = "EP"
         self.server_args.enable_dp_attention = True
+        self.server_args.enable_torch_a2a_moe = True
         global_server_args_dict["enable_dp_attention"] = True
+        global_server_args_dict["enable_torch_a2a_moe"] = True
 
         self.tp_worker.paras_configure_ep()
 
