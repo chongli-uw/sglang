@@ -71,6 +71,8 @@ from sglang.srt.managers.expert_distribution import (
 from sglang.srt.managers.io_struct import (
     AbortReq,
     CloseSessionReqInput,
+    ParaSConfigureReq,
+    ParaSConfigureReqOutput,
     ExpertDistributionReq,
     ExpertDistributionReqOutput,
     FlushCacheReqInput,
@@ -508,6 +510,7 @@ class Scheduler(
                 (SetInternalStateReq, self.set_internal_state),
                 (RpcReqInput, self.handle_rpc_request),
                 (ExpertDistributionReq, self.expert_distribution_handle),
+                (ParaSConfigureReq, self.paras_configure_handle),
             ]
         )
 
@@ -716,11 +719,46 @@ class Scheduler(
         self.paras_dp_rank = self.tp_rank // self.paras_tp_size
         self.paras_tp_group = self.tp_worker.get_paras_tp_group()
         self.paras_tp_cpu_group = self.paras_tp_group.cpu_group
+
+        if self.paras_tp_rank == 0:
+            self.tp_recv_from_tokenizer = self.recv_from_tokenizer
+            self.tp_send_to_tokenizer = self.send_to_tokenizer
+            self.tp_send_to_detokenizer = self.send_to_detokenizer
+            self.tp_recv_from_rpc = self.recv_from_rpc
+        else:
+            self.tp_recv_from_tokenizer = None
+            self.tp_recv_from_rpc = None
+            self.tp_send_to_tokenizer = SimpleNamespace(send_pyobj=lambda x: None)
+            self.tp_send_to_detokenizer = SimpleNamespace(send_pyobj=lambda x: None)
+
         self.paras_ep_size = self.tp_size
-        self.paras_dp_size = self.tp_rank
+        self.paras_ep_rank = self.tp_rank
         self.paras_ep_group = self.tp_group
         self.paras_ep_cpu_group = self.tp_cpu_group
+
+        self.ep_recv_from_tokenizer = self.recv_from_tokenizer
+        self.ep_recv_from_rpc = self.recv_from_rpc
+        self.ep_send_to_tokenizer = self.send_to_tokenizer
+        self.ep_send_to_detokenizer = self.send_to_detokenizer
+
         self.paras_parallelism_config = "EP"
+
+    def paras_configure_helper(self):
+        (
+            self.max_total_num_tokens,
+            self.max_prefill_tokens,
+            self.max_running_requests,
+            self.max_req_len,
+            self.max_req_input_len,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = self.tp_worker.get_worker_info()
+
+        self.tree_cache.reset()
 
     @paras_func
     def paras_configure_tp(self):
@@ -728,6 +766,9 @@ class Scheduler(
         # switch from EP to DP x TP
         self.paras_parallelism_config = "TP"
         self.server_args.enable_dp_attention = False
+        global_server_args_dict["enable_dp_attention"] = False
+
+        self.tp_worker.paras_configure_tp(self.paras_tp_size, self.paras_tp_rank)
 
         # drop-in replacement for scheduler tp configs 
         self.tp_size = self.paras_tp_size
@@ -743,12 +784,20 @@ class Scheduler(
             self.paras_dp_rank,
         )
 
+        self.recv_from_tokenizer = self.tp_recv_from_tokenizer
+        self.send_to_tokenizer = self.tp_send_to_tokenizer
+        self.send_to_detokenizer = self.tp_send_to_detokenizer
+        self.recv_from_rpc = self.tp_recv_from_rpc
+
     @paras_func
     def paras_configure_ep(self):
         assert self.server_args.enable_paras_moe, "ParaS parallelism is not enabled."
         # switch from TP to EP
         self.paras_parallelism_config = "EP"
         self.server_args.enable_dp_attention = True
+        global_server_args_dict["enable_dp_attention"] = True
+
+        self.tp_worker.paras_configure_ep()
 
         # drop-in replacement for scheduler ep configs
         self.tp_size = self.paras_ep_size
@@ -756,6 +805,8 @@ class Scheduler(
         self.tp_group = self.paras_ep_group
         self.tp_cpu_group = self.paras_ep_cpu_group
 
+        # equals to:
+        # self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = 0, 1, self.tp_rank
         self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
             compute_dp_attention_world_info(
                 self.server_args.enable_dp_attention,
@@ -765,6 +816,20 @@ class Scheduler(
             )
         )
 
+        self.recv_from_tokenizer = self.ep_recv_from_tokenizer
+        self.send_to_tokenizer = self.ep_send_to_tokenizer
+        self.send_to_detokenizer = self.ep_send_to_detokenizer
+        self.recv_from_rpc = self.ep_recv_from_rpc
+
+    def paras_configure_handle(self, recv_req: ParaSConfigureReq):
+        if recv_req == ParaSConfigureReq.CONFIGURE_TP:
+            self.paras_configure_tp()
+        elif recv_req == ParaSConfigureReq.CONFIGURE_EP:
+            self.paras_configure_ep()
+        else:
+            raise ValueError("Unrecognized ParaSConfigureReq value")
+        return ParaSConfigureReqOutput()
+    
     @DynamicGradMode()
     def event_loop_normal(self):
         """A normal scheduler loop."""
@@ -1725,7 +1790,7 @@ class Scheduler(
             return
         self.forwrad_step_end_time_s = time.time()
         forward_step_duration = self.forwrad_step_end_time_s - self.forward_step_start_time_s
-        if not global_server_args_dict["enable_dp_attention"]:
+        if not self.server_args.enable_dp_attention:
             forward_batch_size = batch.input_ids.shape[0]
             is_decode = batch.forward_mode.is_decode()
         else:

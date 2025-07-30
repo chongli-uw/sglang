@@ -559,6 +559,7 @@ class Qwen3MoeAttention(nn.Module):
         self.attn_tp_rank = paras_tp_rank
         self.attn_tp_size = paras_tp_size
         self.qkv_proj.paras_configure_tp(paras_tp_size, paras_tp_rank)
+        self.attn.paras_configure_tp(paras_tp_size, paras_tp_rank)
         self.o_proj.paras_configure_tp(paras_tp_size, paras_tp_rank)
 
     @paras_func
@@ -566,6 +567,7 @@ class Qwen3MoeAttention(nn.Module):
         self.attn_tp_size = 1
         self.attn_tp_rank = 0
         self.qkv_proj.paras_configure_ep()
+        self.attn.paras_configure_ep()
         self.o_proj.paras_configure_ep()
 
 class Qwen3MoeDecoderLayer(nn.Module):
@@ -694,7 +696,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         self.attn_tp_size = paras_tp_size
         self.attn_tp_rank = paras_tp_rank
         self.local_dp_size = 1
-
+        
     @paras_func
     def paras_configure_ep(self):
         # Switch from TP to EP

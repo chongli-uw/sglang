@@ -6,17 +6,10 @@ from sglang.srt.distributed.parallel_state import (
     init_model_parallel_group,
     get_bool_env_var,
     GroupCoordinator,
-    _TP,
 )
+import sglang.srt.distributed.parallel_state as parallel_state
 
-from sglang.srt.layers.dp_attention import (
-    _ATTN_TP_RANK,
-    _ATTN_TP_SIZE,
-    _ATTN_DP_RANK,
-    _ATTN_DP_SIZE,
-    _LOCAL_ATTN_DP_SIZE,
-    _LOCAL_ATTN_DP_RANK,
-)
+import sglang.srt.layers.dp_attention as dp_attention
 
 _PARAS_EP: Optional[GroupCoordinator] = None
 
@@ -72,7 +65,7 @@ def initialize_paras_parallel(
 
     # get paras parallel size and rank
     global _PARAS_EP
-    _PARAS_EP = _TP
+    _PARAS_EP = parallel_state._TP
 
     global _PARAS_TP_SIZE, _PARAS_DP_SIZE, _PARAS_EP_SIZE, _PARAS_TP_RANK, _PARAS_DP_RANK, _PARAS_EP_RANK
     _PARAS_TP_SIZE = tp_size
@@ -123,30 +116,30 @@ def initialize_paras_parallel(
 
     
 def paras_comm_configure_tp():
-    global _TP
-    _TP = _PARAS_TP
+    # global _TP
+    parallel_state._TP = _PARAS_TP
 
-    global _ATTN_TP_RANK, _ATTN_TP_SIZE, _ATTN_DP_RANK, _ATTN_DP_SIZE
-    _ATTN_TP_RANK = _PARAS_TP_RANK
-    _ATTN_TP_SIZE = _PARAS_TP_SIZE
-    _ATTN_DP_RANK = 0
-    _ATTN_DP_SIZE = 1
+    # global _ATTN_TP_RANK, _ATTN_TP_SIZE, _ATTN_DP_RANK, _ATTN_DP_SIZE
+    dp_attention._ATTN_TP_RANK = _PARAS_TP_RANK
+    dp_attention._ATTN_TP_SIZE = _PARAS_TP_SIZE
+    dp_attention._ATTN_DP_RANK = 0
+    dp_attention._ATTN_DP_SIZE = 1
 
-    global _LOCAL_ATTN_DP_RANK, _LOCAL_ATTN_DP_SIZE
-    _LOCAL_ATTN_DP_SIZE = 1
-    _LOCAL_ATTN_DP_RANK = 0
+    # global _LOCAL_ATTN_DP_RANK, _LOCAL_ATTN_DP_SIZE
+    dp_attention._LOCAL_ATTN_DP_SIZE = 1
+    dp_attention._LOCAL_ATTN_DP_RANK = 0
 
 def paras_comm_configure_ep():
     # TODO(shaoyuw): adapt for moe dense tp
-    global _TP
-    _TP = _PARAS_EP
+    # global _TP
+    parallel_state._TP = _PARAS_EP
 
-    global _ATTN_TP_RANK, _ATTN_TP_SIZE, _ATTN_DP_RANK, _ATTN_DP_SIZE
-    _ATTN_TP_RANK = 0
-    _ATTN_TP_SIZE = 1
-    _ATTN_DP_RANK = _PARAS_EP_RANK
-    _ATTN_DP_SIZE = _PARAS_EP_SIZE
+    # global _ATTN_TP_RANK, _ATTN_TP_SIZE, _ATTN_DP_RANK, _ATTN_DP_SIZE
+    dp_attention._ATTN_TP_RANK = 0
+    dp_attention._ATTN_TP_SIZE = 1
+    dp_attention._ATTN_DP_RANK = _PARAS_EP_RANK
+    dp_attention._ATTN_DP_SIZE = _PARAS_EP_SIZE
 
-    global _LOCAL_ATTN_DP_RANK, _LOCAL_ATTN_DP_SIZE
-    _LOCAL_ATTN_DP_SIZE = _PARAS_EP_SIZE
-    _LOCAL_ATTN_DP_RANK = _PARAS_EP_RANK
+    # global _LOCAL_ATTN_DP_RANK, _LOCAL_ATTN_DP_SIZE
+    dp_attention._LOCAL_ATTN_DP_SIZE = _PARAS_EP_SIZE
+    dp_attention._LOCAL_ATTN_DP_RANK = _PARAS_EP_RANK

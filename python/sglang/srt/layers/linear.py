@@ -1140,7 +1140,7 @@ class QKVParallelLinear(ColumnParallelLinear):
         tp_num_kv_heads = self.total_num_kv_heads // paras_tp_size
 
         tp_head_start = paras_tp_rank * tp_num_heads
-        tp_head_end = tp_head_start + tp_num_heads
+        tp_head_end = paras_tp_rank * tp_num_heads + tp_num_heads
         tp_k_head_start = self.total_num_heads + paras_tp_rank * tp_num_kv_heads
         tp_k_head_end = tp_k_head_start + tp_num_kv_heads
         tp_v_head_start = (
@@ -1151,19 +1151,24 @@ class QKVParallelLinear(ColumnParallelLinear):
 
         # TODO(shaoyuw): Can we drop full weight?
         self.full_weight = self.weight
-        self.weight = torch.column_stack((
-            self.full_weight[:, tp_head_start:tp_head_end], 
-            self.full_weight[:, tp_k_head_start:tp_k_head_end],
-            self.full_weight[:, tp_v_head_start:tp_v_head_end]
-        ))
+        full_weight_tensor = self.full_weight.data.transpose(0, 1)
+        new_weight_tensor = torch.column_stack((
+            full_weight_tensor[:, tp_head_start*self.head_size:tp_head_end*self.head_size], 
+            full_weight_tensor[:, tp_k_head_start*self.head_size:tp_k_head_end*self.head_size],
+            full_weight_tensor[:, tp_v_head_start*self.head_size:tp_v_head_end*self.head_size]
+        )).transpose(0, 1)
+        self.weight = torch.nn.Parameter(new_weight_tensor, requires_grad=False)
+        set_weight_attrs(self.weight, {"input_dim": 1, "output_dim": 0})
 
         if self.bias is not None:
             self.full_bias = self.bias
-            self.bias = torch.column_stack((
-                self.full_bias[tp_head_start:tp_head_end],
-                self.full_bias[tp_k_head_start:tp_k_head_end],
-                self.full_bias[tp_v_head_start:tp_v_head_end]
+            full_bias_tensor = self.full_bias.data
+            new_bias_tensor = torch.column_stack((
+                full_bias_tensor[tp_head_start:tp_head_end],
+                full_bias_tensor[tp_k_head_start:tp_k_head_end],
+                full_bias_tensor[tp_v_head_start:tp_v_head_end]
             ))
+            self.bias = torch.nn.Parameter(new_bias_tensor, requires_grad=False)
 
         self.tp_size = paras_tp_size
         self.tp_rank = paras_tp_rank
@@ -1361,10 +1366,13 @@ class RowParallelLinear(LinearBase):
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         input_size_per_partition = divide(self.input_size, paras_tp_size)
         row_start = paras_tp_rank * input_size_per_partition
-        row_end = row_start + input_size_per_partition
+        row_end = (paras_tp_rank + 1) * input_size_per_partition
 
         self.full_weight = self.weight
-        self.weight = self.full_weight[row_start:row_end, :]
+        full_weight_tensor = self.full_weight.data.transpose(0, 1)
+        new_weight_tensor = full_weight_tensor[row_start:row_end, :].transpose(0, 1)
+        self.weight = torch.nn.Parameter(new_weight_tensor, requires_grad=False)
+        set_weight_attrs(self.weight, {"input_dim": 1, "output_dim": 0})
         self.tp_size = paras_tp_size
         self.tp_rank = paras_tp_rank
 

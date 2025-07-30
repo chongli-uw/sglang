@@ -28,6 +28,7 @@ from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
 from sglang.srt.managers.io_struct import (
     TokenizedEmbeddingReqInput,
     TokenizedGenerateReqInput,
+    ParaSConfigureReq,
 )
 from sglang.srt.managers.schedule_batch import Req
 from sglang.srt.managers.scheduler import run_scheduler_process
@@ -35,6 +36,7 @@ from sglang.srt.server_args import PortArgs, ServerArgs
 from sglang.srt.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils import bind_port, configure_logger, get_zmq_socket
 from sglang.utils import get_exception_traceback
+from sglang.srt.paras.utils import paras_func
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +111,17 @@ class DataParallelController:
         self.paras_ep_workers = self.workers
         self.paras_tp_workers = self.workers[:: self.server_args.paras_tp_size]
         self.paras_ep_ctrl_msg_step = self.control_message_step
-        self.paras_tp_ctrl_msg_step = self.control_message_step
+        self.paras_tp_ctrl_msg_step = 1
 
+    def paras_configure_helper(self):
+        pass
+
+    @paras_func
     def paras_tp_configure(self):
         self.workers = self.paras_tp_workers
-        self.control_message_step = self.server_args.paras_tp_size
+        self.control_message_step = self.paras_tp_ctrl_msg_step
 
+    @paras_func
     def paras_ep_configure(self):
         self.workers = self.paras_ep_workers
         self.control_message_step = self.paras_ep_ctrl_msg_step
@@ -302,6 +309,14 @@ class DataParallelController:
                     # Send other control messages to first worker of tp group
                     for worker in self.workers[:: self.control_message_step]:
                         worker.send_pyobj(recv_req)
+
+                    if isinstance(recv_req, ParaSConfigureReq):
+                        if recv_req == ParaSConfigureReq.CONFIGURE_TP:
+                            self.paras_tp_configure()
+                        elif recv_req == ParaSConfigureReq.CONFIGURE_EP:
+                            self.paras_ep_configure()
+                        else:
+                            raise ValueError(f"Unknown ParaSConfigureReq: {recv_req}")
 
 
 def run_data_parallel_controller_process(

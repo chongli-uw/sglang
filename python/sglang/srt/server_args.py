@@ -1651,7 +1651,8 @@ class ServerArgs:
         if self.enable_paras_moe:
             assert self.enable_dp_lm_head, "enable_dp_lm_head must be set when enable_paras_moe is set"
             assert self.enable_dp_attention, "enable_dp_attention must be set when enable_paras_moe is set"
-            assert self.paras_tp_size > 0, "paras_tp_size must be positive when enable_paras_moe is set"
+            assert self.paras_tp_size <= 8 and self.paras_tp_size > 0, "paras_tp_size must be positive when enable_paras_moe is set"
+            assert self.tp_size == self.dp_size, "paras moe requires tp_size == dp_size, which means attn tp size is 1"
 
 def prepare_server_args(argv: List[str]) -> ServerArgs:
     """

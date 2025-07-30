@@ -304,7 +304,7 @@ class CommunicateSimpleFn:
 class CommunicateWithAllReduceAndLayerNormFn:
     """Besides communication, needs to
     1. All reduce in tp_attn_group on hidden_states
-    2. Apply layer norm
+    2. Apply norm
     """
 
     @staticmethod

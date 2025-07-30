@@ -902,6 +902,13 @@ class ExpertDistributionReq(Enum):
 class ExpertDistributionReqOutput:
     pass
 
+class ParaSConfigureReq(Enum):
+    CONFIGURE_TP = 1
+    CONFIGURE_EP = 2
+
+@dataclass
+class ParaSConfigureReqOutput:
+    pass
 
 @dataclass
 class ProfileReq:

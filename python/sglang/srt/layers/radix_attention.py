@@ -20,7 +20,7 @@ from torch import nn
 
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-
+from sglang.srt.paras.utils import paras_func
 
 class AttentionType(Enum):
     """
@@ -106,3 +106,28 @@ class RadixAttention(nn.Module):
             save_kv_cache,
             **kwargs,
         )
+
+    def paras_configure_helper(self):
+        pass
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        """
+        Configure the attention layer for tensor parallelism.
+        """
+        self.ep_q_head_num = self.tp_q_head_num
+        self.ep_k_head_num = self.tp_k_head_num
+        self.ep_v_head_num = self.tp_v_head_num
+
+        self.tp_q_head_num = self.tp_q_head_num // paras_tp_size
+        self.tp_k_head_num = self.tp_k_head_num // paras_tp_size
+        self.tp_v_head_num = self.tp_v_head_num // paras_tp_size
+
+    @paras_func
+    def paras_configure_ep(self):
+        """
+        Configure the attention layer for expert parallelism.
+        """
+        self.tp_q_head_num = self.ep_q_head_num
+        self.tp_k_head_num = self.ep_k_head_num
+        self.tp_v_head_num = self.ep_v_head_num

@@ -71,6 +71,8 @@ from sglang.srt.managers.io_struct import (
     CloseSessionReqInput,
     ConfigureLoggingReq,
     EmbeddingReqInput,
+    ParaSConfigureReq,
+    ParaSConfigureReqOutput,
     ExpertDistributionReq,
     ExpertDistributionReqOutput,
     FlushCacheReqInput,
@@ -311,6 +313,26 @@ class TokenizerManager:
         self.expert_distribution_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
+        self.paras_configure_communicator = _Communicator(
+            self.send_to_scheduler, server_args.dp_size
+        )
+
+        self.communicators = [
+            self.init_weights_update_group_communicator,
+            self.update_weights_from_distributed_communicator,
+            self.update_weights_from_tensor_communicator,
+            self.get_weights_by_name_communicator,
+            self.release_memory_occupation_communicator,
+            self.resume_memory_occupation_communicator,
+            self.slow_down_communicator,
+            self.flush_cache_communicator,
+            self.profile_communicator,
+            self.health_check_communitcator,
+            self.get_internal_state_communicator,
+            self.set_internal_state_communicator,
+            self.expert_distribution_communicator,
+            self.paras_configure_communicator,
+        ]
 
         self._result_dispatcher = TypeBasedDispatcher(
             [
@@ -376,6 +398,10 @@ class TokenizerManager:
                 (
                     ExpertDistributionReqOutput,
                     self.expert_distribution_communicator.handle_recv,
+                ),
+                (
+                    ParaSConfigureReqOutput,
+                    self.paras_configure_communicator.handle_recv,
                 ),
                 (HealthCheckOutput, lambda x: None),
             ]
@@ -873,6 +899,21 @@ class TokenizerManager:
     async def dump_expert_distribution_record(self):
         self.auto_create_handle_loop()
         await self.expert_distribution_communicator(ExpertDistributionReq.DUMP_RECORD)
+    
+    async def paras_configure_tp(self):
+        self.auto_create_handle_loop()
+        paras_dp_size = self.server_args.tp_size // self.server_args.paras_tp_size
+        for comm in self.communicators:
+            comm._fan_out = paras_dp_size
+        # self.paras_configure_communicator._fan_out = self.server_args.tp_size // self.server_args.paras_tp_size
+        await self.paras_configure_communicator(ParaSConfigureReq.CONFIGURE_TP)
+
+    async def paras_configure_ep(self):
+        self.auto_create_handle_loop()
+        for comm in self.communicators:
+            comm._fan_out = self.server_args.dp_size
+        self.health_check_communitcator._fan_out = 1 # health check is special
+        await self.paras_configure_communicator(ParaSConfigureReq.CONFIGURE_EP)
 
     async def update_weights_from_disk(
         self,

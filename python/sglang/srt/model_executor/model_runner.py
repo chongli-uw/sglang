@@ -1350,6 +1350,7 @@ class ModelRunner:
         self.token_to_kv_pool_allocator.paras_resize_and_clear(self.max_total_num_tokens)
 
         if self.server_args.max_running_requests is None:
+            max_num_reqs = self.server_args.max_running_requests
             if max_num_reqs is None:
                 max_num_reqs = min(
                     max(

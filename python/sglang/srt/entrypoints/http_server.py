@@ -424,6 +424,23 @@ async def dump_expert_distribution_record_async():
         status_code=200,
     )
 
+@app.api_route("/paras_configure_tp", methods=["GET", "POST"])
+async def paras_configure_tp():
+    """Configure the ParaS TP parallelism."""
+    await _global_state.tokenizer_manager.paras_configure_tp()
+    return Response(
+        content="ParaS TP parallelism configured.\n",
+        status_code=200,
+    )
+
+@app.api_route("/paras_configure_ep", methods=["GET", "POST"])
+async def paras_configure_ep():
+    """Configure the ParaS EP parallelism."""
+    await _global_state.tokenizer_manager.paras_configure_ep()
+    return Response(
+        content="ParaS EP parallelism configured.\n",
+        status_code=200,
+    )
 
 @app.post("/update_weights_from_disk")
 async def update_weights_from_disk(obj: UpdateWeightFromDiskReqInput, request: Request):

@@ -269,12 +269,12 @@ class TpModelWorkerClient:
         pass
 
     @paras_func
-    def paras_configure_tp(self, paras_tp_size: int):
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         """
         Configure the worker for ParaS TP mode.
         This will reshape the kv cache and update the worker info.
         """
-        self.worker.paras_configure_tp(paras_tp_size)
+        self.worker.paras_configure_tp(paras_tp_size, paras_tp_rank)
     
     @paras_func
     def paras_configure_ep(self):
