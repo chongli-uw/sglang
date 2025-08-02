@@ -80,6 +80,13 @@ from sglang.srt.models.qwen2_moe import Qwen2MoeModel
 from sglang.srt.two_batch_overlap import MaybeTboDeepEPDispatcher
 from sglang.srt.utils import DeepEPMode, add_prefix, is_non_idle_and_non_empty
 from sglang.srt.paras.utils import paras_func
+from sglang.srt.paras.paras_parallel_state import (
+    get_paras_tp_size,
+    get_paras_tp_rank,
+    get_paras_dp_size,
+    get_paras_dp_rank,
+)
+    
 
 Qwen3MoeConfig = None
 
@@ -371,6 +378,8 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
             + global_server_args_dict["ep_num_redundant_experts"],
             top_k=config.num_experts_per_tok,
             layer_id=layer_id,
+            tp_size=get_paras_tp_size(),
+            tp_rank=get_paras_tp_rank(),
             hidden_size=config.hidden_size,
             intermediate_size=config.moe_intermediate_size,
             renormalize=config.norm_topk_prob,
@@ -403,6 +412,8 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
         self.paralleism_config = "ep"
         self.tp_size = 1
         self.experts = self.ep_experts
+        
+layer_cnt = 0
 
 class Qwen3MoeAttention(nn.Module):
     def __init__(
@@ -524,6 +535,7 @@ class Qwen3MoeAttention(nn.Module):
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self._apply_qk_norm(q, k)
         q, k = self.rotary_emb(positions, q, k)
+
         inner_state = q, k, v, forward_batch
         return None, forward_batch, inner_state
 
@@ -532,7 +544,16 @@ class Qwen3MoeAttention(nn.Module):
         if inner_state is None:
             return hidden_states
         attn_output = self.attn(*inner_state)
+        global layer_cnt
+        if layer_cnt == 0 and get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"before o_proj, attn_output: {attn_output[:, :4]}, "
+            )
         output, _ = self.o_proj(attn_output)
+        if layer_cnt == 0 and get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"after o_proj, output: {output[:, :4]}, "
+            )
         return output
 
     def forward(
@@ -718,7 +739,14 @@ class Qwen3MoeDecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-
+        global layer_cnt
+        layer_cnt = self.layer_id
+        
+        if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"{self.layer_id} input : hidden_states: {hidden_states[:, :4]}"
+            )
+        
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
@@ -730,20 +758,27 @@ class Qwen3MoeDecoderLayer(nn.Module):
                 forward_batch=forward_batch,
             )
             # if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
-            #         logger.info(f"After attention layer {self.layer_id}: hidden_states: {hidden_states[:1, :4]}, residual: {residual[:1, :4]}")
+            #         logger.info(f"After attention layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}")
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
+        
+        if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"before prepare_mlp layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}"
+            )
 
         hidden_states = self.mlp(hidden_states, forward_batch)
 
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
-
-        # if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
-        #     logger.info(f"After moe layer {self.layer_id}: hidden_states: {hidden_states[:1, :4]}, residual: {residual[:1, :4]}")
+        
+        if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"After moe layer: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}"
+            )
 
         return hidden_states, residual
 
@@ -912,8 +947,17 @@ class Qwen3MoeForCausalLM(nn.Module):
             ckpt_up_proj_name="up_proj",
             num_experts=self.config.num_experts,
         )
+        
+        def print_on_rank_0(msg):
+            if get_tensor_model_parallel_rank() == 0:
+                print(msg)
+        
+        # print_on_rank_0(f"expert_params_mapping: {expert_params_mapping}")
 
         params_dict = dict(self.named_parameters())
+        for key in params_dict.keys():
+            print_on_rank_0(f"{key}")
+        
         for name, loaded_weight in weights:
             layer_id = get_layer_id(name)
             if (
@@ -957,6 +1001,9 @@ class Qwen3MoeForCausalLM(nn.Module):
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)
+                    # if layer_id == 0:
+                    #     print_on_rank_0(f"Loading expert param: {name} with shard_id: {shard_id} and expert_id: {expert_id}")
+                    
                     param = params_dict[name]
                     weight_loader = param.weight_loader
                     weight_loader(
@@ -966,6 +1013,19 @@ class Qwen3MoeForCausalLM(nn.Module):
                         shard_id=shard_id,
                         expert_id=expert_id,
                     )
+                    
+                    if global_server_args_dict["enable_paras_moe"]:
+                        name = name.replace("experts", "tp_experts")
+                        param = params_dict[name]
+                        weight_loader = param.weight_loader
+                        weight_loader(
+                            param,
+                            loaded_weight,
+                            name,
+                            shard_id=shard_id,
+                            expert_id=expert_id,
+                        )
+                        
                     break
                 else:
                     # Skip loading extra bias for GPTQ models.

@@ -114,6 +114,21 @@ def initialize_paras_parallel(
         group_name="paras_dp",
     )
 
+def get_paras_tp_size() -> int:
+    assert _PARAS_TP_SIZE is not None, "ParaS tensor parallel size is not initialized"
+    return _PARAS_TP_SIZE
+
+def get_paras_tp_rank() -> int:
+    assert _PARAS_TP_RANK is not None, "ParaS tensor parallel rank is not initialized"
+    return _PARAS_TP_RANK
+
+def get_paras_dp_size() -> int:
+    assert _PARAS_DP_SIZE is not None, "ParaS data parallel size is not initialized"
+    return _PARAS_DP_SIZE
+
+def get_paras_dp_rank() -> int:
+    assert _PARAS_DP_RANK is not None, "ParaS data parallel rank is not initialized"
+    return _PARAS_DP_RANK
     
 def paras_comm_configure_tp():
     # global _TP

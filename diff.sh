@@ -7,11 +7,14 @@ function send_one_request() {
   curl -X POST http://localhost:30000/generate \
        -H "Content-Type: application/json" \
        -d '{
-      "text": "The capital city of France is",
-        "stream": false,
-          "return_logprob": true,
+            "text": "The capital city of France is",
+            "stream": false,
+            "return_logprob": true,
             "sampling_params": {
-          "max_new_tokens": 10
+              "max_new_tokens": 10,
+              "temperature": 0.0,
+              "top_p": 1.0,
+              "top_k": 1
             }
           }'
 

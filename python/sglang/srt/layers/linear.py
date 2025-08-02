@@ -1398,3 +1398,4 @@ class RowParallelLinear(LinearBase):
         self.tp_size = 1
         self.tp_rank = 0
         self.weight = self.full_weight
+        self.bias = self.full_bias if self.bias is not None else None

@@ -301,6 +301,7 @@ class FusedMoE(torch.nn.Module):
         topk_group: Optional[int] = None,
         quant_config: Optional[QuantizationConfig] = None,
         tp_size: Optional[int] = None,
+        tp_rank: Optional[int] = None,
         prefix: str = "",
         custom_routing_function: Optional[Callable] = None,
         correction_bias: Optional[torch.Tensor] = None,
@@ -319,6 +320,9 @@ class FusedMoE(torch.nn.Module):
         self.hidden_size = hidden_size
         self.tp_size = (
             tp_size if tp_size is not None else get_tensor_model_parallel_world_size()
+        )
+        self.tp_rank = (
+            tp_rank if tp_rank is not None else get_tensor_model_parallel_rank()
         )
         self.routed_scaling_factor = routed_scaling_factor
         self.top_k = top_k
@@ -537,7 +541,7 @@ class FusedMoE(torch.nn.Module):
         SHARD_ID_TO_SHARDED_DIM = {"w1": 0, "w2": 1, "w3": 0}
 
         expert_data = param.data[expert_id]
-        tp_rank = get_tensor_model_parallel_rank()
+        tp_rank = self.tp_rank
 
         # is_transposed: if the dim to shard the weight
         # should be flipped. Required by GPTQ, compressed-tensors
