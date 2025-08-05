@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 from typing import Optional
 
 from sglang.srt.distributed.parallel_state import (
@@ -96,6 +97,8 @@ def initialize_paras_parallel(
         ),
         group_name="paras_tp",
     )
+    x = torch.ones(16, dtype=torch.bfloat16, device=_PARAS_TP.device)
+    dist.all_reduce(x, group=_PARAS_TP.device_group)
 
     # Build the ParaS data model-parallel groups.
     num_paras_data_model_parallel_groups: int = world_size // dp_size
@@ -113,6 +116,8 @@ def initialize_paras_parallel(
         use_custom_allreduce=False,
         group_name="paras_dp",
     )
+    x = torch.ones(16, dtype=torch.bfloat16, device=_PARAS_DP.device)
+    dist.all_reduce(x, group=_PARAS_DP.device_group)
 
 def get_paras_tp_size() -> int:
     assert _PARAS_TP_SIZE is not None, "ParaS tensor parallel size is not initialized"
