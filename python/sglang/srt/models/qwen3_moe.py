@@ -80,7 +80,7 @@ from sglang.srt.models.qwen2_moe import Qwen2MoeMLP as Qwen3MoeMLP
 from sglang.srt.models.qwen2_moe import Qwen2MoeModel
 from sglang.srt.two_batch_overlap import MaybeTboDeepEPDispatcher
 from sglang.srt.utils import DeepEPMode, add_prefix, is_non_idle_and_non_empty
-from sglang.srt.paras.utils import paras_func
+from sglang.srt.paras.utils import paras_func, paras_weight_buffer
 from sglang.srt.paras.paras_parallel_state import (
     get_paras_tp_size,
     get_paras_tp_rank,
@@ -420,43 +420,50 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
         # EP to DPxEP:
         if paras_dp_size > 1:
             w13_ep = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
-            w13_ep_gathered = torch.empty((self.num_local_experts * paras_dp_size, 2 * self.moe_intermediate_size, self.hidden_size), dtype=w13_ep.dtype, device=w13_ep.device)
+            w13_ep_gathered = paras_weight_buffer.get_buffer((self.num_local_experts * paras_dp_size, 2 * self.moe_intermediate_size, self.hidden_size), dtype=w13_ep.dtype, device=w13_ep.device)
             dist.all_gather_into_tensor(w13_ep_gathered, w13_ep, group=paras_dp_group)
             self.ep_experts.paras_drop_params("w13_weight")
 
             w2_ep = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
-            w2_ep_gathered = torch.empty((self.num_local_experts * paras_dp_size, self.hidden_size, self.moe_intermediate_size), dtype=w2_ep.dtype, device=w2_ep.device)
+            w2_ep_gathered = paras_weight_buffer.get_buffer((self.num_local_experts * paras_dp_size, self.hidden_size, self.moe_intermediate_size), dtype=w2_ep.dtype, device=w2_ep.device)
             dist.all_gather_into_tensor(w2_ep_gathered, w2_ep, group=paras_dp_group)
             self.ep_experts.paras_drop_params("w2_weight")
 
             self.num_local_experts *= paras_dp_size
         else:
             w13_ep_gathered = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
+            paras_weight_buffer.put(w13_ep_gathered)
             self.ep_experts.paras_drop_params("w13_weight")
+
             w2_ep_gathered = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
+            paras_weight_buffer.put(w2_ep_gathered)
             self.ep_experts.paras_drop_params("w2_weight")
 
         # DPxEP to DPxTP:
         w13_ep = w13_ep_gathered.view(self.num_local_experts, 2, paras_tp_size, moe_intermediate_size_after_tp * self.hidden_size)
-        w13_ep_permuted = w13_ep.permute(2, 0, 1, 3).contiguous()
+        w13_ep_permuted = paras_weight_buffer.get_buffer_like(w13_ep).view(paras_tp_size, self.num_local_experts, 2, moe_intermediate_size_after_tp * self.hidden_size)
+        w13_ep_permuted.copy_(w13_ep.permute(2, 0, 1, 3))
         w13_tp = w13_ep_gathered # reuse memory
         dist.all_to_all_single(output=w13_tp, input=w13_ep_permuted, group=paras_tp_group)
         if paras_dp_size > 1:
             w13_tp_permuted = w13_ep_permuted.view(paras_dp_size, paras_tp_size, -1)
             w13_tp_permuted.copy_(w13_tp.view(paras_tp_size, paras_dp_size, -1).transpose(0, 1))
             w13_tp_weight = w13_tp_permuted
+            paras_weight_buffer.put(w13_tp)
         else:
             w13_tp_weight = w13_tp
         self.tp_experts.paras_load_params(w13_tp_weight.view(self.num_global_experts, 2 * moe_intermediate_size_after_tp, self.hidden_size), "w13_weight")
             
         w2_ep = w2_ep_gathered.data.view(self.num_local_experts, self.hidden_size, paras_tp_size, moe_intermediate_size_after_tp)
-        w2_ep_permuted = w2_ep.permute(2, 0, 1, 3).contiguous()
+        w2_ep_permuted = paras_weight_buffer.get_buffer_like(w2_ep).view(paras_tp_size, self.num_local_experts, self.hidden_size, moe_intermediate_size_after_tp)
+        w2_ep_permuted.copy_(w2_ep.permute(2, 0, 1, 3))
         w2_tp = w2_ep_gathered # reuse memory
         dist.all_to_all_single(output=w2_tp, input=w2_ep_permuted, group=paras_tp_group)
         if paras_dp_size > 1:
             w2_tp_permuted = w2_ep_permuted.view(paras_dp_size, paras_tp_size, -1)
             w2_tp_permuted.copy_(w2_tp.view(paras_tp_size, paras_dp_size, -1).transpose(0, 1))
             w2_tp_weight = w2_tp_permuted
+            paras_weight_buffer.put(w2_tp)
         else:
             w2_tp_weight = w2_tp
         self.tp_experts.paras_load_params(w2_tp_weight.view(self.num_global_experts, self.hidden_size, moe_intermediate_size_after_tp), "w2_weight")
@@ -464,7 +471,6 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
         self.paralleism_config = "tp"
         self.tp_size = paras_tp_size
         self.experts = self.tp_experts
-        torch.cuda.empty_cache()
 
     @paras_func
     def paras_configure_ep(self):
@@ -801,15 +807,19 @@ class Qwen3MoeDecoderLayer(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         global layer_cnt
         layer_cnt = self.layer_id
-        
-        if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"{self.layer_id} input : hidden_states: {hidden_states[:, :4]}"
-            )
-        
+
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
+
+        def log_conditional(log: str):
+            if (
+                self.layer_id == 0
+                and get_tensor_model_parallel_rank() == 0
+                and forward_batch.forward_mode.is_extend()
+                and is_non_idle_and_non_empty(forward_batch.forward_mode, hidden_states)
+            ):
+                logger.info(log)
 
         if hidden_states.shape[0] != 0:
             hidden_states = self.self_attn(
@@ -817,34 +827,23 @@ class Qwen3MoeDecoderLayer(nn.Module):
                 hidden_states=hidden_states,
                 forward_batch=forward_batch,
             )
-            # if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
-            #         logger.info(f"After attention layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}")
-
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
-        
-        if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"before prepare_mlp layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}"
-            )
+
+        log_conditional(
+            f"After attention layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}"
+        )
 
         hidden_states = self.mlp(hidden_states, forward_batch)
 
-        if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"After mlp layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}"
-            )
+        log_conditional(
+            f"After MLP layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}"
+        )
 
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
-        
-        if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"After moe post process: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}"
-            )
-
         return hidden_states, residual
 
     def op_comm_prepare_attn(
@@ -1124,7 +1123,7 @@ class Qwen3MoeForCausalLM(nn.Module):
         )
     
     def paras_configure_helper(self):
-        pass
+        paras_weight_buffer.release_all()
 
     @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
