@@ -82,27 +82,30 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
         hidden_size: int,
         intermediate_size: int,
         params_dtype: torch.dtype,
+        skip_weights_init: bool = False,
         **extra_weight_attrs,
     ):
-        # Fused gate_up_proj (column parallel)
-        w13_weight = torch.nn.Parameter(
-            torch.empty(
-                num_experts, 2 * intermediate_size, hidden_size, dtype=params_dtype
-            ),
-            requires_grad=False,
-        )
-        layer.register_parameter("w13_weight", w13_weight)
-        set_weight_attrs(w13_weight, extra_weight_attrs)
+        if not skip_weights_init:
+            # Fused gate_up_proj (column parallel)
+            w13_weight = torch.nn.Parameter(
+                torch.empty(
+                    num_experts, 2 * intermediate_size, hidden_size, dtype=params_dtype
+                ),
+                requires_grad=False,
+            )
+            layer.register_parameter("w13_weight", w13_weight)
+            set_weight_attrs(w13_weight, extra_weight_attrs)
 
-        # down_proj (row parallel)
-        w2_weight = torch.nn.Parameter(
-            torch.empty(
-                num_experts, hidden_size, intermediate_size, dtype=params_dtype
-            ),
-            requires_grad=False,
-        )
-        layer.register_parameter("w2_weight", w2_weight)
-        set_weight_attrs(w2_weight, extra_weight_attrs)
+            # down_proj (row parallel)
+            w2_weight = torch.nn.Parameter(
+                torch.empty(
+                    num_experts, hidden_size, intermediate_size, dtype=params_dtype
+                ),
+                requires_grad=False,
+            )
+            layer.register_parameter("w2_weight", w2_weight)
+            set_weight_attrs(w2_weight, extra_weight_attrs)
+        layer.extra_weight_attrs = extra_weight_attrs
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         if _use_aiter:
@@ -311,6 +314,7 @@ class FusedMoE(torch.nn.Module):
         inplace: bool = True,
         no_combine: bool = False,
         routed_scaling_factor: Optional[float] = None,
+        skip_weights_init: bool = False,
     ):
         super().__init__()
 
@@ -363,6 +367,7 @@ class FusedMoE(torch.nn.Module):
             intermediate_size_per_partition=self.intermediate_size_per_partition,
             params_dtype=params_dtype,
             weight_loader=self.weight_loader,
+            skip_weights_init=skip_weights_init,
         )
 
     def _load_per_tensor_weight_scale(
@@ -759,3 +764,31 @@ class FusedMoE(torch.nn.Module):
             # If we are in the row parallel case (down_proj)
             else:
                 param_data[expert_id] = loaded_weight
+
+    def paras_load_params(self, params_data, params_name):
+        if params_name == "w13_weight":
+            w13_weight = torch.nn.Parameter(
+                params_data,
+                requires_grad=False,
+            )
+            if "w13_weight" in self._parameters:
+                del self._parameters["w13_weight"]
+            self.register_parameter("w13_weight", w13_weight)
+            set_weight_attrs(w13_weight, self.extra_weight_attrs)
+        elif params_name == "w2_weight":
+            w2_weight = torch.nn.Parameter(
+                params_data,
+                requires_grad=False,
+            )
+            if "w2_weight" in self._parameters:
+                del self._parameters["w2_weight"]
+            self.register_parameter("w2_weight", w2_weight)
+            set_weight_attrs(w2_weight, self.extra_weight_attrs)
+
+    def paras_drop_params(self, params_name):
+        assert params_name in [
+            "w13_weight",
+            "w2_weight",
+        ], f"Unsupported parameter name: {params_name}"
+        if params_name in self._parameters:
+            del self._parameters[params_name]

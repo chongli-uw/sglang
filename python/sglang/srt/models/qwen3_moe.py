@@ -22,6 +22,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import torch
 from torch import nn
+import torch.distributed as dist
 
 from sglang.srt.distributed import (
     get_pp_group,
@@ -85,6 +86,8 @@ from sglang.srt.paras.paras_parallel_state import (
     get_paras_tp_rank,
     get_paras_dp_size,
     get_paras_dp_rank,
+    get_paras_tp_group,
+    get_paras_dp_group,
 )
     
 
@@ -372,6 +375,11 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
 
         # For ParaS, we start with torch A2A EP and switch to TP at a certain point
         assert global_server_args_dict["enable_torch_a2a_moe"] and not global_server_args_dict["enable_deepep_moe"]
+        self.num_global_experts = config.num_experts
+        self.num_local_experts = self.num_global_experts // self.tp_size
+        self.hidden_size = config.hidden_size
+        self.moe_intermediate_size = config.moe_intermediate_size
+
         self.ep_experts = self.experts
         self.tp_experts = FusedMoE(
             num_experts=config.num_experts
@@ -385,6 +393,7 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
             renormalize=config.norm_topk_prob,
             quant_config=quant_config,
             prefix=add_prefix("experts", prefix),
+            skip_weights_init=True,
             # no deepep config
         )
 
@@ -403,12 +412,63 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
 
     @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        moe_intermediate_size_after_tp = self.moe_intermediate_size // paras_tp_size
+        paras_tp_group = get_paras_tp_group().device_group
+        paras_dp_group = get_paras_dp_group().device_group
+        paras_dp_size = get_paras_dp_size()
+
+        # EP to DPxEP:
+        if paras_dp_size > 1:
+            w13_ep = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
+            w13_ep_gathered = torch.empty((self.num_local_experts * paras_dp_size, 2 * self.moe_intermediate_size, self.hidden_size), dtype=w13_ep.dtype, device=w13_ep.device)
+            dist.all_gather_into_tensor(w13_ep_gathered, w13_ep, group=paras_dp_group)
+            self.ep_experts.paras_drop_params("w13_weight")
+
+            w2_ep = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
+            w2_ep_gathered = torch.empty((self.num_local_experts * paras_dp_size, self.hidden_size, self.moe_intermediate_size), dtype=w2_ep.dtype, device=w2_ep.device)
+            dist.all_gather_into_tensor(w2_ep_gathered, w2_ep, group=paras_dp_group)
+            self.ep_experts.paras_drop_params("w2_weight")
+
+            self.num_local_experts *= paras_dp_size
+        else:
+            w13_ep_gathered = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
+            self.ep_experts.paras_drop_params("w13_weight")
+            w2_ep_gathered = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
+            self.ep_experts.paras_drop_params("w2_weight")
+
+        # DPxEP to DPxTP:
+        w13_ep = w13_ep_gathered.view(self.num_local_experts, 2, paras_tp_size, moe_intermediate_size_after_tp * self.hidden_size)
+        w13_ep_permuted = w13_ep.permute(2, 0, 1, 3).contiguous()
+        w13_tp = w13_ep_gathered # reuse memory
+        dist.all_to_all_single(output=w13_tp, input=w13_ep_permuted, group=paras_tp_group)
+        if paras_dp_size > 1:
+            w13_tp_permuted = w13_ep_permuted.view(paras_dp_size, paras_tp_size, -1)
+            w13_tp_permuted.copy_(w13_tp.view(paras_tp_size, paras_dp_size, -1).transpose(0, 1))
+            w13_tp_weight = w13_tp_permuted
+        else:
+            w13_tp_weight = w13_tp
+        self.tp_experts.paras_load_params(w13_tp_weight.view(self.num_global_experts, 2 * moe_intermediate_size_after_tp, self.hidden_size), "w13_weight")
+            
+        w2_ep = w2_ep_gathered.data.view(self.num_local_experts, self.hidden_size, paras_tp_size, moe_intermediate_size_after_tp)
+        w2_ep_permuted = w2_ep.permute(2, 0, 1, 3).contiguous()
+        w2_tp = w2_ep_gathered # reuse memory
+        dist.all_to_all_single(output=w2_tp, input=w2_ep_permuted, group=paras_tp_group)
+        if paras_dp_size > 1:
+            w2_tp_permuted = w2_ep_permuted.view(paras_dp_size, paras_tp_size, -1)
+            w2_tp_permuted.copy_(w2_tp.view(paras_tp_size, paras_dp_size, -1).transpose(0, 1))
+            w2_tp_weight = w2_tp_permuted
+        else:
+            w2_tp_weight = w2_tp
+        self.tp_experts.paras_load_params(w2_tp_weight.view(self.num_global_experts, self.hidden_size, moe_intermediate_size_after_tp), "w2_weight")
+
         self.paralleism_config = "tp"
         self.tp_size = paras_tp_size
         self.experts = self.tp_experts
+        torch.cuda.empty_cache()
 
     @paras_func
     def paras_configure_ep(self):
+        assert False, "Qwen3MoeSparseMoeBlockParaS does not support configure back to EP at this moment"
         self.paralleism_config = "ep"
         self.tp_size = 1
         self.experts = self.ep_experts
@@ -771,13 +831,18 @@ class Qwen3MoeDecoderLayer(nn.Module):
 
         hidden_states = self.mlp(hidden_states, forward_batch)
 
+        if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"After mlp layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}"
+            )
+
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
         
         if self.layer_id == 0 and get_tensor_model_parallel_rank() == 0:
             logger.info(
-                f"After moe layer: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}"
+                f"After moe post process: hidden_states: {hidden_states[:, :4]}, residual: {residual[:, :4]}"
             )
 
         return hidden_states, residual
@@ -1003,7 +1068,6 @@ class Qwen3MoeForCausalLM(nn.Module):
                     name = name.replace(weight_name, param_name)
                     # if layer_id == 0:
                     #     print_on_rank_0(f"Loading expert param: {name} with shard_id: {shard_id} and expert_id: {expert_id}")
-                    
                     param = params_dict[name]
                     weight_loader = param.weight_loader
                     weight_loader(
@@ -1016,16 +1080,16 @@ class Qwen3MoeForCausalLM(nn.Module):
                     
                     if global_server_args_dict["enable_paras_moe"]:
                         name = name.replace("experts", "tp_experts")
-                        param = params_dict[name]
-                        weight_loader = param.weight_loader
-                        weight_loader(
-                            param,
-                            loaded_weight,
-                            name,
-                            shard_id=shard_id,
-                            expert_id=expert_id,
-                        )
-                        
+                        if name in params_dict:
+                            param = params_dict[name]
+                            weight_loader = param.weight_loader
+                            weight_loader(
+                                param,
+                                loaded_weight,
+                                name,
+                                shard_id=shard_id,
+                                expert_id=expert_id,
+                            )
                     break
                 else:
                     # Skip loading extra bias for GPTQ models.
@@ -1044,11 +1108,12 @@ class Qwen3MoeForCausalLM(nn.Module):
                         logger.warning(f"Parameter {name} not found in params_dict")
 
         # TODO mimic deepseek
-        self.routed_experts_weights_of_layer = {
-            layer_id: self.model.layers[layer_id].mlp.get_moe_weights()
-            for layer_id in range(self.start_layer, self.end_layer)
-            if isinstance(self.model.layers[layer_id].mlp, Qwen3MoeSparseMoeBlock)
-        }
+        if not global_server_args_dict["enable_paras_moe"]:
+            self.routed_experts_weights_of_layer = {
+                layer_id: self.model.layers[layer_id].mlp.get_moe_weights()
+                for layer_id in range(self.start_layer, self.end_layer)
+                if isinstance(self.model.layers[layer_id].mlp, Qwen3MoeSparseMoeBlock)
+            }
 
     @classmethod
     def get_model_config_for_expert_location(cls, config):
