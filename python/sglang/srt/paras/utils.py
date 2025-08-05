@@ -1,4 +1,5 @@
 import torch
+import functools
 
 def paras_func(func):
     """
@@ -10,6 +11,28 @@ def paras_func(func):
             self.paras_configure_helper()
         return result
     return wrapper
+
+def paras_profile_func(op_name):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            profiler = torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    "paras",
+                    worker_name=f"{op_name}_rank{self.tp_rank}",
+                ),
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True,
+            )
+            profiler.start()
+            try:
+                return func(self, *args, **kwargs)
+            finally:
+                profiler.stop()
+        return wrapper
+    return decorator
 
 class ParaSWeightBuffer:
     def __init__(self):

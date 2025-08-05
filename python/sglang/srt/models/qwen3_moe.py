@@ -479,8 +479,6 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
         self.tp_size = 1
         self.experts = self.ep_experts
         
-layer_cnt = 0
-
 class Qwen3MoeAttention(nn.Module):
     def __init__(
         self,
@@ -610,16 +608,7 @@ class Qwen3MoeAttention(nn.Module):
         if inner_state is None:
             return hidden_states
         attn_output = self.attn(*inner_state)
-        global layer_cnt
-        if layer_cnt == 0 and get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"before o_proj, attn_output: {attn_output[:, :4]}, "
-            )
         output, _ = self.o_proj(attn_output)
-        if layer_cnt == 0 and get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"after o_proj, output: {output[:, :4]}, "
-            )
         return output
 
     def forward(
@@ -805,9 +794,6 @@ class Qwen3MoeDecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        global layer_cnt
-        layer_cnt = self.layer_id
-
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )

@@ -97,8 +97,9 @@ def initialize_paras_parallel(
         ),
         group_name="paras_tp",
     )
-    x = torch.ones(16, dtype=torch.bfloat16, device=_PARAS_TP.device)
-    dist.all_reduce(x, group=_PARAS_TP.device_group)
+    x = torch.ones(128 * _PARAS_TP_SIZE, dtype=torch.bfloat16, device=_PARAS_TP.device)
+    scattered_x = torch.empty_like(x)
+    dist.all_to_all_single(scattered_x, x, group=_PARAS_TP.device_group)
 
     # Build the ParaS data model-parallel groups.
     num_paras_data_model_parallel_groups: int = world_size // dp_size
@@ -116,8 +117,9 @@ def initialize_paras_parallel(
         use_custom_allreduce=False,
         group_name="paras_dp",
     )
-    x = torch.ones(16, dtype=torch.bfloat16, device=_PARAS_DP.device)
-    dist.all_reduce(x, group=_PARAS_DP.device_group)
+    x = torch.ones(128, dtype=torch.bfloat16, device=_PARAS_DP.device)
+    gathered_x = torch.zeros((x.shape[0] * _PARAS_DP_SIZE), dtype=torch.bfloat16, device=_PARAS_DP.device)
+    dist.all_gather_into_tensor(gathered_x, x, group=_PARAS_DP.device_group)
 
 def get_paras_tp_size() -> int:
     assert _PARAS_TP_SIZE is not None, "ParaS tensor parallel size is not initialized"

@@ -155,7 +155,7 @@ from sglang.srt.utils import (
     suppress_other_loggers,
 )
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
-from sglang.srt.paras.utils import paras_func
+from sglang.srt.paras.utils import paras_func, paras_profile_func
 
 logger = logging.getLogger(__name__)
 
@@ -769,8 +769,19 @@ class Scheduler(
         self.server_args.enable_torch_a2a_moe = False
         global_server_args_dict["enable_dp_attention"] = False
         global_server_args_dict["enable_torch_a2a_moe"] = False
-
+        profiler = torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                "paras_configure_tp",
+                worker_name=f"rank{self.tp_rank}",
+            ),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        )
+        profiler.start()
         self.tp_worker.paras_configure_tp(self.paras_tp_size, self.paras_tp_rank)
+        profiler.stop()
 
         # drop-in replacement for scheduler tp configs 
         self.tp_size = self.paras_tp_size
