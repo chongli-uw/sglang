@@ -410,64 +410,90 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
     def paras_configure_helper(self):
         pass
 
-    @paras_func
-    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
-        moe_intermediate_size_after_tp = self.moe_intermediate_size // paras_tp_size
-        paras_tp_group = get_paras_tp_group().device_group
+    def paras_configure_tp_all_gather(self, stream=None, handles=[], async_op=False):
         paras_dp_group = get_paras_dp_group().device_group
         paras_dp_size = get_paras_dp_size()
 
+        all_gather_handles = []
         # EP to DPxEP:
-        if paras_dp_size > 1:
-            w13_ep = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
-            w13_ep_gathered = paras_weight_buffer.get_buffer((self.num_local_experts * paras_dp_size, 2 * self.moe_intermediate_size, self.hidden_size), dtype=w13_ep.dtype, device=w13_ep.device)
-            dist.all_gather_into_tensor(w13_ep_gathered, w13_ep, group=paras_dp_group)
-            self.ep_experts.paras_drop_params("w13_weight")
+        with torch.cuda.stream(stream):
+            for handle in handles:
+                handle.wait()
+            if paras_dp_size > 1:
+                w13_ep = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
+                self.w13_ep_gathered = paras_weight_buffer.get_buffer((self.num_local_experts * paras_dp_size, 2 * self.moe_intermediate_size, self.hidden_size), dtype=w13_ep.dtype, device=w13_ep.device)
+                all_gather_handles.append(dist.all_gather_into_tensor(self.w13_ep_gathered, w13_ep, group=paras_dp_group, async_op=True))
+                self.ep_experts.paras_drop_params("w13_weight")
 
-            w2_ep = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
-            w2_ep_gathered = paras_weight_buffer.get_buffer((self.num_local_experts * paras_dp_size, self.hidden_size, self.moe_intermediate_size), dtype=w2_ep.dtype, device=w2_ep.device)
-            dist.all_gather_into_tensor(w2_ep_gathered, w2_ep, group=paras_dp_group)
-            self.ep_experts.paras_drop_params("w2_weight")
+                w2_ep = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
+                self.w2_ep_gathered = paras_weight_buffer.get_buffer((self.num_local_experts * paras_dp_size, self.hidden_size, self.moe_intermediate_size), dtype=w2_ep.dtype, device=w2_ep.device)
+                all_gather_handles.append(dist.all_gather_into_tensor(self.w2_ep_gathered, w2_ep, group=paras_dp_group, async_op=True))
+                self.ep_experts.paras_drop_params("w2_weight")
 
-            self.num_local_experts *= paras_dp_size
+                self.num_local_experts *= paras_dp_size
+            else:
+                w13_ep_gathered = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
+                paras_weight_buffer.put(w13_ep_gathered)
+                self.ep_experts.paras_drop_params("w13_weight")
+
+                w2_ep_gathered = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
+                paras_weight_buffer.put(w2_ep_gathered)
+                self.ep_experts.paras_drop_params("w2_weight")
+        
+        if async_op:
+            return all_gather_handles
         else:
-            w13_ep_gathered = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
-            paras_weight_buffer.put(w13_ep_gathered)
-            self.ep_experts.paras_drop_params("w13_weight")
-
-            w2_ep_gathered = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
-            paras_weight_buffer.put(w2_ep_gathered)
-            self.ep_experts.paras_drop_params("w2_weight")
+            for handle in all_gather_handles:
+                handle.wait()
+        
+    def paras_configure_tp_all_to_all(self, stream=None, handles=[]):
+        paras_tp_size = get_paras_tp_size()
+        paras_dp_size = get_paras_dp_size()
+        paras_tp_group = get_paras_tp_group().device_group
+        moe_intermediate_size_after_tp = self.moe_intermediate_size // paras_tp_size
 
         # DPxEP to DPxTP:
-        w13_ep = w13_ep_gathered.view(self.num_local_experts, 2, paras_tp_size, moe_intermediate_size_after_tp * self.hidden_size)
-        w13_ep_permuted = paras_weight_buffer.get_buffer_like(w13_ep).view(paras_tp_size, self.num_local_experts, 2, moe_intermediate_size_after_tp * self.hidden_size)
-        w13_ep_permuted.copy_(w13_ep.permute(2, 0, 1, 3))
-        w13_tp = w13_ep_gathered # reuse memory
-        dist.all_to_all_single(output=w13_tp, input=w13_ep_permuted, group=paras_tp_group)
-        if paras_dp_size > 1:
-            w13_tp_permuted = w13_ep_permuted.view(paras_dp_size, paras_tp_size, -1)
-            w13_tp_permuted.copy_(w13_tp.view(paras_tp_size, paras_dp_size, -1).transpose(0, 1))
-            w13_tp_weight = w13_tp_permuted
-            paras_weight_buffer.put(w13_tp)
-        else:
-            w13_tp_weight = w13_tp
-        self.tp_experts.paras_load_params(w13_tp_weight.view(self.num_global_experts, 2 * moe_intermediate_size_after_tp, self.hidden_size), "w13_weight")
-            
-        w2_ep = w2_ep_gathered.data.view(self.num_local_experts, self.hidden_size, paras_tp_size, moe_intermediate_size_after_tp)
-        w2_ep_permuted = paras_weight_buffer.get_buffer_like(w2_ep).view(paras_tp_size, self.num_local_experts, self.hidden_size, moe_intermediate_size_after_tp)
-        w2_ep_permuted.copy_(w2_ep.permute(2, 0, 1, 3))
-        w2_tp = w2_ep_gathered # reuse memory
-        dist.all_to_all_single(output=w2_tp, input=w2_ep_permuted, group=paras_tp_group)
-        if paras_dp_size > 1:
-            w2_tp_permuted = w2_ep_permuted.view(paras_dp_size, paras_tp_size, -1)
-            w2_tp_permuted.copy_(w2_tp.view(paras_tp_size, paras_dp_size, -1).transpose(0, 1))
-            w2_tp_weight = w2_tp_permuted
-            paras_weight_buffer.put(w2_tp)
-        else:
-            w2_tp_weight = w2_tp
-        self.tp_experts.paras_load_params(w2_tp_weight.view(self.num_global_experts, self.hidden_size, moe_intermediate_size_after_tp), "w2_weight")
+        with torch.cuda.stream(stream):
+            for handle in handles:
+                handle.wait()
+            w13_ep = self.w13_ep_gathered.view(self.num_local_experts, 2, paras_tp_size, moe_intermediate_size_after_tp * self.hidden_size)
+            # w13_ep_permuted = paras_weight_buffer.get_buffer_like(w13_ep).view(paras_tp_size, self.num_local_experts, 2, moe_intermediate_size_after_tp * self.hidden_size)
+            # w13_ep_permuted.copy_(w13_ep.permute(2, 0, 1, 3))
+            w13_ep_permuted = w13_ep.permute(2, 0, 1, 3).contiguous()
+            w13_tp = w13_ep # reuse memory
+            w13_handle = dist.all_to_all_single(output=w13_tp, input=w13_ep_permuted, group=paras_tp_group, async_op=True)
 
+            w2_ep = self.w2_ep_gathered.data.view(self.num_local_experts, self.hidden_size, paras_tp_size, moe_intermediate_size_after_tp)
+            # w2_ep_permuted = paras_weight_buffer.get_buffer_like(w2_ep).view(paras_tp_size, self.num_local_experts, self.hidden_size, moe_intermediate_size_after_tp)
+            # w2_ep_permuted.copy_(w2_ep.permute(2, 0, 1, 3))
+            w2_ep_permuted = w2_ep.permute(2, 0, 1, 3).contiguous()
+            w2_tp = w2_ep # reuse memory
+            w2_handle = dist.all_to_all_single(output=w2_tp, input=w2_ep_permuted, group=paras_tp_group, async_op=True)
+
+            w13_handle.wait()
+            if paras_dp_size > 1:
+                w13_tp_permuted = w13_ep_permuted.view(paras_dp_size, paras_tp_size, -1)
+                w13_tp_permuted.copy_(w13_tp.view(paras_tp_size, paras_dp_size, -1).transpose(0, 1))
+                w13_tp_weight = w13_tp_permuted
+                paras_weight_buffer.put(w13_tp)
+            else:
+                w13_tp_weight = w13_tp
+                paras_weight_buffer.put(w13_ep_permuted)
+            self.tp_experts.paras_load_params(w13_tp_weight.view(self.num_global_experts, 2 * moe_intermediate_size_after_tp, self.hidden_size), "w13_weight")
+                
+            w2_handle.wait()
+            if paras_dp_size > 1:
+                w2_tp_permuted = w2_ep_permuted.view(paras_dp_size, paras_tp_size, -1)
+                w2_tp_permuted.copy_(w2_tp.view(paras_tp_size, paras_dp_size, -1).transpose(0, 1))
+                w2_tp_weight = w2_tp_permuted
+                paras_weight_buffer.put(w2_tp)
+            else:
+                w2_tp_weight = w2_tp
+                paras_weight_buffer.put(w2_ep_permuted)
+            self.tp_experts.paras_load_params(w2_tp_weight.view(self.num_global_experts, self.hidden_size, moe_intermediate_size_after_tp), "w2_weight")
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         self.paralleism_config = "tp"
         self.tp_size = paras_tp_size
         self.experts = self.tp_experts
@@ -733,6 +759,19 @@ class Qwen3MoeDecoderLayer(nn.Module):
     def paras_configure_helper(self):
         pass
 
+    def paras_configure_tp_attn(self, paras_tp_size: int, paras_tp_rank: int):
+        self.self_attn.paras_configure_tp(paras_tp_size, paras_tp_rank)
+
+    def paras_configure_tp_mlp(self, paras_tp_size: int, paras_tp_rank: int):
+        self.mlp.paras_configure_tp_all_gather()
+        self.mlp.paras_configure_tp_all_to_all()
+
+    def paras_configure_tp_mlp_all_gather(self, stream, handles, async_op=False):
+        return self.mlp.paras_configure_tp_all_gather(stream, handles, async_op)
+    
+    def paras_configure_tp_mlp_all_to_all(self, stream, handles):
+        return self.mlp.paras_configure_tp_all_to_all(stream, handles)
+
     @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         # Switch from EP to TP
@@ -742,7 +781,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         self.paras_ep_layer_scatter_modes = self.layer_scatter_modes
         self.paras_ep_layer_communicator = self.layer_communicator
 
-        self.self_attn.paras_configure_tp(paras_tp_size, paras_tp_rank)
+        # config only
         self.mlp.paras_configure_tp(paras_tp_size, paras_tp_rank)
 
         # build new tp context
@@ -906,16 +945,51 @@ class Qwen3MoeModel(Qwen2MoeModel):
             decoder_layer_type=Qwen3MoeDecoderLayer,
         )
 
-    @paras_func
-    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+    def paras_configure_tp_naive(self, paras_tp_size: int, paras_tp_rank: int):
+        for layer in self.layers:
+            assert isinstance(layer, Qwen3MoeDecoderLayer), "Layer is not Qwen3MoeDecoderLayer"
+            layer.paras_configure_tp_attn(paras_tp_size, paras_tp_rank)
+            layer.paras_configure_tp_mlp(paras_tp_size, paras_tp_rank)
+            layer.paras_configure_tp(paras_tp_size, paras_tp_rank)
+
+    def paras_configure_tp_overlap(self, paras_tp_size: int, paras_tp_rank: int):
         """
         Configure the model for tensor parallelism (TP).
         Note(shaoyuw): the embedding layer is set to DP, but it works for TP as well. 
                        There is no need to modify it.
         """
-        for layer in self.layers:
+        stream_1 = torch.cuda.Stream()
+        stream_2 = torch.cuda.Stream()
+        
+        self.layers[0].paras_configure_tp_attn(paras_tp_size, paras_tp_rank)
+        last_layer_handles = self.layers[0].paras_configure_tp_mlp_all_gather(stream_1, [], async_op=True)
+        nlayers = len(self.layers)
+        for i, layer in enumerate(self.layers):
             assert isinstance(layer, Qwen3MoeDecoderLayer), "Layer is not Qwen3MoeDecoderLayer"
+            not_last_layer = i < nlayers - 1
+            if not_last_layer:
+                next_layer = self.layers[i+1]
+                next_layer.paras_configure_tp_attn(paras_tp_size, paras_tp_rank)
+                new_handles = next_layer.paras_configure_tp_mlp_all_gather(stream_2, last_layer_handles, async_op=True)
+
+            layer.paras_configure_tp_mlp_all_to_all(stream_1, last_layer_handles)
             layer.paras_configure_tp(paras_tp_size, paras_tp_rank)
+
+            if not_last_layer:
+                last_layer_handles = new_handles
+                stream_1, stream_2 = stream_2, stream_1
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int, overlap: bool = True):
+        """
+        Configure the model for tensor parallelism (TP).
+        Note(shaoyuw): the embedding layer is set to DP, but it works for TP as well. 
+                       There is no need to modify it.
+        """
+        if overlap:
+            self.paras_configure_tp_overlap(paras_tp_size, paras_tp_rank)
+        else:
+            self.paras_configure_tp_naive(paras_tp_size, paras_tp_rank)
 
     @paras_func
     def paras_configure_ep(self):
@@ -1109,6 +1183,7 @@ class Qwen3MoeForCausalLM(nn.Module):
         )
     
     def paras_configure_helper(self):
+        torch.cuda.synchronize()
         paras_weight_buffer.release_all()
 
     @paras_func

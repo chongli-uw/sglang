@@ -490,6 +490,7 @@ class MHATokenToKVPool(KVCache):
         )
 
     def paras_configure_helper(self):
+        # TODO(shaoyuw): check for ParaS, the data ptrs now remains the same
         self.data_ptrs = torch.tensor(
             [x.data_ptr() for x in self.k_buffer + self.v_buffer],
             dtype=torch.uint64,
