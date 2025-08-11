@@ -133,7 +133,7 @@ class ServerArgs:
     lora_backend: str = "triton"
 
     # Kernel backend
-    attention_backend: Optional[str] = None
+    attention_backend: Optional[str] = "fa3"
     sampling_backend: Optional[str] = None
     grammar_backend: Optional[str] = None
     mm_attention_backend: Optional[str] = None

@@ -511,10 +511,10 @@ class MHATokenToKVPool(KVCache):
         # It does not intrusively change the number of heads, just increases the number of slots by reshapin kv cache.
         sharded_head_num = self.head_num // paras_tp_size
         for i in range(self.layer_num):
-            self.k_buffer[i] = self.k_buffer[i].reshape(
+            self.k_buffer[i] = self.k_buffer[i].view(
                 (-1, sharded_head_num, self.head_dim)
             )
-            self.v_buffer[i] = self.v_buffer[i].reshape(
+            self.v_buffer[i] = self.v_buffer[i].view(
                 (-1, sharded_head_num, self.head_dim)
             )
 
@@ -522,10 +522,10 @@ class MHATokenToKVPool(KVCache):
     def paras_configure_ep(self):
         # ParaS: Reshape kv cache from TP to EP.
         for i in range(self.layer_num):
-            self.k_buffer[i] = self.k_buffer[i].reshape(
+            self.k_buffer[i] = self.k_buffer[i].view(
                 (-1, self.head_num, self.head_dim)
             )
-            self.v_buffer[i] = self.v_buffer[i].reshape(
+            self.v_buffer[i] = self.v_buffer[i].view(
                 (-1, self.head_num, self.head_dim)
             )
 
