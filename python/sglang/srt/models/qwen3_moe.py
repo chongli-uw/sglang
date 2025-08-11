@@ -836,16 +836,6 @@ class Qwen3MoeDecoderLayer(nn.Module):
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
-
-        def log_conditional(log: str):
-            if (
-                self.layer_id == 0
-                and get_tensor_model_parallel_rank() == 0
-                and forward_batch.forward_mode.is_extend()
-                and is_non_idle_and_non_empty(forward_batch.forward_mode, hidden_states)
-            ):
-                logger.info(log)
-
         if hidden_states.shape[0] != 0:
             hidden_states = self.self_attn(
                 positions=positions,
@@ -855,17 +845,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
-
-        log_conditional(
-            f"After attention layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}"
-        )
-
         hidden_states = self.mlp(hidden_states, forward_batch)
-
-        log_conditional(
-            f"After MLP layer {self.layer_id}: hidden_states: {hidden_states[:, :4]}"
-        )
-
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
@@ -980,7 +960,7 @@ class Qwen3MoeModel(Qwen2MoeModel):
                 stream_1, stream_2 = stream_2, stream_1
 
     @paras_func
-    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int, overlap: bool = True):
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int, overlap: bool = False):
         """
         Configure the model for tensor parallelism (TP).
         Note(shaoyuw): the embedding layer is set to DP, but it works for TP as well. 
@@ -1072,15 +1052,7 @@ class Qwen3MoeForCausalLM(nn.Module):
             num_experts=self.config.num_experts,
         )
         
-        def print_on_rank_0(msg):
-            if get_tensor_model_parallel_rank() == 0:
-                print(msg)
-        
-        # print_on_rank_0(f"expert_params_mapping: {expert_params_mapping}")
-
         params_dict = dict(self.named_parameters())
-        for key in params_dict.keys():
-            print_on_rank_0(f"{key}")
         
         for name, loaded_weight in weights:
             layer_id = get_layer_id(name)
