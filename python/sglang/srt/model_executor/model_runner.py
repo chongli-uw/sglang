@@ -624,6 +624,16 @@ class ModelRunner:
                 f"TP rank {self.tp_rank} could finish the model loading, but there are other ranks that didn't finish loading. It is likely due to unexpected failures (e.g., OOM) or a slow node."
             ) from None
 
+        # measure model offloading time
+        torch.cuda.synchronize()
+        start_offload = time.time()
+        cpu_model = self.model.to("cpu", dtype=self.dtype)
+        torch.cuda.synchronize()
+        end_offload = time.time()
+        logger.info(
+            f"Offload model to CPU in {end_offload - start_offload:.2f} seconds"
+        )
+
     def update_expert_location(
         self,
         new_expert_location_metadata: ExpertLocationMetadata,
