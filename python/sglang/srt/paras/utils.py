@@ -1,5 +1,29 @@
 import torch
 import functools
+import pynvml
+
+def print_nvml_mem_for_torch_device(device_id: int):
+    """
+    Print NVML GPU memory usage for a given torch.device
+    """
+    pynvml.nvmlInit()
+    handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
+    mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+    pynvml.nvmlShutdown()
+
+    print(f"[NVML] {device_id}:")
+    print(f"  Total: {mem.total/1024**3:.2f} GB")
+    print(f"  Used:  {mem.used/1024**3:.2f} GB")
+    print(f"  Free:  {mem.free/1024**3:.2f} GB")
+
+def paras_memory_check(checkpoint: str = ""):
+    allocated = torch.cuda.memory_allocated() / (1024 ** 3)
+    reserved = torch.cuda.memory_reserved() / (1024 ** 3)
+    print(f"ParaS {checkpoint} Memory Allocated: {allocated:.2f} GB, "
+          f"Reserved: {reserved:.2f} GB, "
+          f"Max Allocated: {torch.cuda.max_memory_allocated() / (1024 ** 3):.2f} GB")
+
+    print_nvml_mem_for_torch_device(torch.cuda.current_device())
 
 def paras_func(func):
     """

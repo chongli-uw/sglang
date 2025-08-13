@@ -113,7 +113,7 @@ from sglang.srt.paras.paras_parallel_state import (
     paras_comm_configure_tp,
     paras_comm_configure_ep,
 )
-from sglang.srt.paras.utils import paras_func
+from sglang.srt.paras.utils import paras_func, paras_memory_check
 
 _is_hip = is_hip()
 
@@ -1368,15 +1368,18 @@ class ModelRunner:
         assert not self.use_mla_backend, (
             "ParaS does not support MLA backend yet. "
         )
+        if paras_tp_rank == 0:
+            paras_memory_check("before paras_configure_tp")
         assert isinstance(self.token_to_kv_pool, MHATokenToKVPool)
         self.token_to_kv_pool.paras_configure_tp(paras_tp_size, paras_tp_rank)
         paras_comm_configure_tp()
-
         from sglang.srt.models.qwen3_moe import Qwen3MoeForCausalLM
         assert isinstance(self.model, Qwen3MoeForCausalLM), (
             "ParaS only supports Qwen3MoeForCausalLM model for now."
         )
         self.model.paras_configure_tp(paras_tp_size, paras_tp_rank)
+        if paras_tp_rank == 0:
+            paras_memory_check("after paras_configure_tp")
 
     @paras_func
     def paras_configure_ep(self):

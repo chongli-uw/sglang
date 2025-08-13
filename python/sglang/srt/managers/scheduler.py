@@ -883,14 +883,10 @@ class Scheduler(
         idle_batch_cnt = 0
         recording_max_idle_batch_cnt = 100
 
-        trigger_parallelism_switch = False
 
         while True:
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
-
-            if trigger_parallelism_switch:
-                pass
 
             # Hack for parallelism switch
             continue_loop = True
@@ -899,6 +895,7 @@ class Scheduler(
                 self.cur_batch = batch
             else:
                 batch = None
+                self.last_batch = None
 
             if batch:
                 batch.launch_done = threading.Event()
