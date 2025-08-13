@@ -1036,6 +1036,10 @@ class Qwen3MoeForCausalLM(nn.Module):
         return self.model.end_layer
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        import time
+        torch.cuda.synchronize()
+        start_loading = time.time()
+
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ("qkv_proj", "q_proj", "q"),
@@ -1145,6 +1149,11 @@ class Qwen3MoeForCausalLM(nn.Module):
                 for layer_id in range(self.start_layer, self.end_layer)
                 if isinstance(self.model.layers[layer_id].mlp, Qwen3MoeSparseMoeBlock)
             }
+        end_loading = time.time()
+        torch.cuda.synchronize()
+        logger.info(
+            f"Qwen3MoeForCausalLM loaded weights in {end_loading - start_loading:.2f} seconds"
+        )
 
     @classmethod
     def get_model_config_for_expert_location(cls, config):
