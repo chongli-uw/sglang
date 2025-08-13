@@ -219,6 +219,7 @@ class Scheduler(
         pp_rank: int,
         dp_rank: Optional[int],
     ):
+        start_build_time = time.time()
         # Parse args
         self.server_args = server_args
         self.tp_rank = tp_rank
@@ -519,6 +520,12 @@ class Scheduler(
         )
         self.init_disaggregation()
         self.init_paras_config()
+
+        torch.cuda.synchronize()
+        end_build_time = time.time()
+        logger.info(
+            f"Scheduler built in {end_build_time - start_build_time:.2f} seconds"
+        )
 
     def maybe_sleep_on_idle(self):
         if self.idle_sleeper is not None:
