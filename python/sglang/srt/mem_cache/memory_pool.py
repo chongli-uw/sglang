@@ -508,6 +508,7 @@ class MHATokenToKVPool(KVCache):
     @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         # ParaS: Reshape kv cache from EP to TP.
+        # TODO: change the size of kv cache pool
         # It does not intrusively change the number of heads, just increases the number of slots by reshapin kv cache.
         sharded_head_num = self.head_num // paras_tp_size
         for i in range(self.layer_num):
