@@ -256,6 +256,7 @@ class ServerArgs:
     quantize_and_serve: bool = False
 
     # Memory and scheduling
+    enable_fake_prefill: bool = False
     mem_fraction_static: Optional[float] = None
     max_running_requests: Optional[int] = None
     max_queued_requests: Optional[int] = None
@@ -2090,6 +2091,12 @@ class ServerArgs:
         )
 
         # Memory and scheduling
+        parser.add_argument(
+            "--enable-fake-prefill",
+            action="store_true",
+            default=ServerArgs.enable_fake_prefill,
+            help="If set, the server will use fake prefill.",
+        )
         parser.add_argument(
             "--mem-fraction-static",
             type=float,

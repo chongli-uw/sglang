@@ -273,7 +273,7 @@ class Scheduler(
         self.page_size = server_args.page_size
         self.enable_hierarchical_cache = server_args.enable_hierarchical_cache
         self.enable_hicache_storage = server_args.hicache_storage_backend is not None
-        self.fake_prefill = True
+        self.enable_fake_prefill = server_args.enable_fake_prefill
 
         # Distributed rank info
         self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
@@ -966,7 +966,7 @@ class Scheduler(
             self.cur_batch = batch
 
             if batch:
-                if self.fake_prefill and batch.forward_mode.is_extend():
+                if self.enable_fake_prefill and batch.forward_mode.is_extend():
                     self.fake_process_batch_result_prefill(batch)
                 else:
                     result = self.run_batch(batch)
@@ -993,7 +993,7 @@ class Scheduler(
 
             batch_result = None
             if batch:
-                if self.fake_prefill and batch.forward_mode.is_extend():
+                if self.enable_fake_prefill and batch.forward_mode.is_extend():
                     self.fake_process_batch_result_prefill(batch)
                 else:
                     batch_result = self.run_batch(batch)
