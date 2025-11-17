@@ -42,6 +42,18 @@ class SchedulerOutputProcessorMixin:
     We put them into a separate file to make the `scheduler.py` shorter.
     """
 
+    def fake_process_batch_result_prefill(
+        self,
+        batch: ScheduleBatch,
+    ):
+        from sglang.srt.managers.utils import GenerationBatchResult
+        n = len(batch.reqs)
+        batch.output_ids = batch.input_ids[:n]
+        result = GenerationBatchResult(
+            next_token_ids=batch.output_ids,
+        )
+        self.process_batch_result_prefill(batch, result)
+
     def process_batch_result_prefill(
         self: Scheduler,
         batch: ScheduleBatch,

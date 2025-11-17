@@ -273,6 +273,7 @@ class Scheduler(
         self.page_size = server_args.page_size
         self.enable_hierarchical_cache = server_args.enable_hierarchical_cache
         self.enable_hicache_storage = server_args.hicache_storage_backend is not None
+        self.fake_prefill = True
 
         # Distributed rank info
         self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
@@ -965,8 +966,11 @@ class Scheduler(
             self.cur_batch = batch
 
             if batch:
-                result = self.run_batch(batch)
-                self.process_batch_result(batch, result)
+                if self.fake_prefill and batch.forward_mode.is_extend():
+                    self.fake_process_batch_result_prefill(batch)
+                else:
+                    result = self.run_batch(batch)
+                    self.process_batch_result(batch, result)
             else:
                 # When the server is idle, do self-check and re-init some states
                 self.self_check_during_idle()
@@ -982,15 +986,20 @@ class Scheduler(
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
 
+            last_batch_in_queue = False
+
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
 
             batch_result = None
             if batch:
-                batch_result = self.run_batch(batch)
-                self.result_queue.append((batch.copy(), batch_result))
-
-            if self.last_batch:
+                if self.fake_prefill and batch.forward_mode.is_extend():
+                    self.fake_process_batch_result_prefill(batch)
+                else:
+                    batch_result = self.run_batch(batch)
+                    self.result_queue.append((batch.copy(), batch_result))
+                    last_batch_in_queue = True
+            if self.last_batch and self.last_batch_in_queue:
                 # Process the results of the last batch
                 tmp_batch, tmp_result = self.result_queue.popleft()
                 self.process_batch_result(tmp_batch, tmp_result)
@@ -1000,6 +1009,7 @@ class Scheduler(
 
             self.launch_batch_sample_if_needed(batch_result)
             self.last_batch = batch
+            self.last_batch_in_queue = last_batch_in_queue
 
             if envs.SGLANG_ENABLE_RUNTIME_MEM_LEAK_CHECK.get():
                 self._check_runtime_mem_leak()
