@@ -617,6 +617,8 @@ async def async_request_profile(api_url: str) -> RequestFuncOutput:
         try:
             body = {
                 "activities": getattr(args, "profile_activities", []),
+                "num_steps": getattr(args, "profile_num_steps", 0),
+                "start_step": getattr(args, "profile_start_step", 0),
             }
             async with session.post(url=api_url, json=body) as response:
                 if response.status == 200:
@@ -1946,7 +1948,7 @@ async def benchmark(
         if pd_separated:
             if pd_profile_urls:
                 await _call_profile_pd(pd_profile_urls, "stop")
-        else:
+        elif args.profile_num_steps is None:
             print("Stopping profiler...")
             profile_output = await async_request_profile(
                 api_url=base_url + "/stop_profile"
@@ -2585,6 +2587,18 @@ if __name__ == "__main__":
         nargs="+",
         default=["CPU", "GPU"],
         choices=["CPU", "GPU", "CUDA_PROFILER"],
+    )
+    parser.add_argument(
+        "--profile-num-steps",
+        type=int,
+        default=10,
+        help="The number of forward steps to profile.",
+    )
+    parser.add_argument(
+        "--profile-start-step",
+        type=int,
+        default=100,
+        help="The step to start profiling.",
     )
     parser.add_argument(
         "--lora-name",
