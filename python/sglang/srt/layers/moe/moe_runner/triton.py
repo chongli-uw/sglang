@@ -22,11 +22,16 @@ from sglang.srt.layers.moe.utils import MoeRunnerBackend
 from sglang.srt.utils import cpu_has_amx_support, is_cpu, is_cuda, is_hip
 
 if TYPE_CHECKING:
+    from sglang.srt.layers.moe.token_dispatcher.deepep import (
+        DeepEPLLCombineInput,
+        DeepEPLLDispatchOutput,
+        DeepEPNormalCombineInput,
+        DeepEPNormalDispatchOutput,
+    )
     from sglang.srt.layers.moe.token_dispatcher.standard import (
         StandardCombineInput,
         StandardDispatchOutput,
     )
-
 
 _is_hip = is_hip()
 _is_cuda = is_cuda()

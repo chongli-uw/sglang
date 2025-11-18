@@ -82,16 +82,18 @@ class DeepEPMoE(FusedMoE):
             activation=activation,
             routed_scaling_factor=routed_scaling_factor,
         )
-
+        
         if _use_aiter or _is_npu:
             self.deprecate_flag = False
+        elif quant_config is None:
+            self.deprecate_flag = True
         elif deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and isinstance(
             quant_config, Fp8Config
         ):
             self.deprecate_flag = True
         else:
             self.deprecate_flag = False
-
+            
         if self.deprecate_flag:
             return
 

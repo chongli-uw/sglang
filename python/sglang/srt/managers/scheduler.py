@@ -966,11 +966,8 @@ class Scheduler(
             self.cur_batch = batch
 
             if batch:
-                if self.enable_fake_prefill and batch.forward_mode.is_extend():
-                    self.fake_process_batch_result_prefill(batch)
-                else:
-                    result = self.run_batch(batch)
-                    self.process_batch_result(batch, result)
+                result = self.run_batch(batch)
+                self.process_batch_result(batch, result)
             else:
                 # When the server is idle, do self-check and re-init some states
                 self.self_check_during_idle()
@@ -986,20 +983,15 @@ class Scheduler(
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
 
-            last_batch_in_queue = False
 
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
 
             batch_result = None
             if batch:
-                if self.enable_fake_prefill and batch.forward_mode.is_extend():
-                    self.fake_process_batch_result_prefill(batch)
-                else:
-                    batch_result = self.run_batch(batch)
-                    self.result_queue.append((batch.copy(), batch_result))
-                    last_batch_in_queue = True
-            if self.last_batch and self.last_batch_in_queue:
+                batch_result = self.run_batch(batch)
+                self.result_queue.append((batch.copy(), batch_result))
+            if self.last_batch:
                 # Process the results of the last batch
                 tmp_batch, tmp_result = self.result_queue.popleft()
                 self.process_batch_result(tmp_batch, tmp_result)
@@ -1009,7 +1001,6 @@ class Scheduler(
 
             self.launch_batch_sample_if_needed(batch_result)
             self.last_batch = batch
-            self.last_batch_in_queue = last_batch_in_queue
 
             if envs.SGLANG_ENABLE_RUNTIME_MEM_LEAK_CHECK.get():
                 self._check_runtime_mem_leak()
@@ -1676,6 +1667,16 @@ class Scheduler(
                     self.running_batch.merge_batch(self.last_batch)
 
         new_batch = self.get_new_batch_prefill()
+        
+        if self.enable_fake_prefill and new_batch is not None:
+            self.fake_process_batch_result_prefill(new_batch)
+            new_batch.filter_batch()
+            if not new_batch.is_prefill_only:
+                if self.running_batch.is_empty():
+                    self.running_batch = new_batch
+                else:
+                    self.running_batch.merge_batch(new_batch)
+            new_batch = None
 
         need_dp_attn_preparation = require_mlp_sync(self.server_args)
 
@@ -2217,10 +2218,10 @@ class Scheduler(
         tbo_split_seq_index, global_forward_mode = tbo_preparer.compute_output(
             global_info[:, :, 4:6]
         )
-
+        
         if local_batch is None and max(global_num_tokens) > 0:
             local_batch = get_idle_batch()
-
+            
         if local_batch is not None:
             # TODO: handle the case when moe_dense_tp_size != 1
             if not require_mlp_tp_gather:
