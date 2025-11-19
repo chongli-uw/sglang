@@ -35,6 +35,7 @@ class SchedulerProfilerMixin:
         self.profiler_target_forward_ct: Optional[int] = None
         self.profiler_target_prefill_ct: Optional[int] = None
         self.profiler_target_decode_ct: Optional[int] = None
+        self.profile_start_min_batch_size: Optional[int] = None
         self.profiler_prefill_ct: Optional[int] = None
         self.profiler_decode_ct: Optional[int] = None
         self.profile_by_stage: bool = False
@@ -42,11 +43,12 @@ class SchedulerProfilerMixin:
         self.profile_in_progress: bool = False
         self.rpd_profiler = None
         self.merge_profiles = False
-
+        
     def init_profile(
         self,
         output_dir: Optional[str],
         start_step: Optional[int],
+        start_min_batch_size: Optional[int],
         num_steps: Optional[int],
         activities: Optional[List[str]],
         with_stack: Optional[bool],
@@ -89,6 +91,8 @@ class SchedulerProfilerMixin:
                 self.profiler_target_forward_ct = (
                     self.profiler_start_forward_ct + num_steps
                 )
+            elif start_min_batch_size:
+                self.profile_start_min_batch_size = start_min_batch_size
             else:
                 self.profiler_target_forward_ct = self.forward_ct + num_steps
             # The caller will be notified when reaching profiler_target_forward_ct
@@ -104,6 +108,8 @@ class SchedulerProfilerMixin:
         logger.info(
             f"Profiling starts{stage_str}. Traces will be saved to: {self.torch_profiler_output_dir} (with profile id: {self.profile_id})",
         )
+        
+        self.profile_batch_size = []
 
         activities = self.profiler_activities
         with_stack = self.torch_profiler_with_stack
@@ -272,6 +278,8 @@ class SchedulerProfilerMixin:
             self.torch_profiler_output_dir,
             merge_message,
         )
+        logger.info(f"Profiled batch size: {self.profile_batch_size}")
+        self.profile_batch_size = []
         self.torch_profiler = None
         self.profile_in_progress = False
         self.profiler_start_forward_ct = None
@@ -301,6 +309,12 @@ class SchedulerProfilerMixin:
                 pass
             else:
                 raise RuntimeError(f"unsupported profile stage: {batch.forward_mode}")
+        elif self.profile_start_min_batch_size:
+            if batch.batch_size() >= self.profile_start_min_batch_size:
+                self.start_profile()
+                self.profile_target_forward_ct = self.forward_ct + self.profile_steps
+            if self.forward_ct >= self.profile_target_forward_ct:
+                self.stop_profile()
         else:
             # Check profiler
             if (
@@ -313,13 +327,17 @@ class SchedulerProfilerMixin:
                 and self.profiler_start_forward_ct == self.forward_ct
             ):
                 self.start_profile()
+                
+        if self.profile_in_progress:
+            self.profile_batch_size.append(batch.batch_size())
 
     def profile(self, recv_req: ProfileReq):
         if recv_req.type == ProfileReqType.START_PROFILE:
-            if recv_req.profile_by_stage or recv_req.start_step:
+            if recv_req.profile_by_stage or recv_req.start_step or recv_req.start_min_batch_size:
                 return self.init_profile(
                     recv_req.output_dir,
                     recv_req.start_step,
+                    recv_req.start_min_batch_size,
                     recv_req.num_steps,
                     recv_req.activities,
                     recv_req.with_stack,
@@ -332,6 +350,7 @@ class SchedulerProfilerMixin:
                 self.init_profile(
                     recv_req.output_dir,
                     recv_req.start_step,
+                    recv_req.start_min_batch_size,
                     recv_req.num_steps,
                     recv_req.activities,
                     recv_req.with_stack,

@@ -1345,6 +1345,7 @@ class ProfileReq(BaseReq):
     output_dir: Optional[str] = None
     start_step: Optional[int] = None
     num_steps: Optional[int] = None
+    start_min_batch_size: Optional[int] = None
     activities: Optional[List[str]] = None
     profile_by_stage: bool = False
     with_stack: Optional[bool] = None
