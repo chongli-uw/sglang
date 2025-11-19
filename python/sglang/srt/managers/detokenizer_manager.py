@@ -23,6 +23,8 @@ from typing import Dict, List, Union
 import psutil
 import setproctitle
 import zmq
+import time
+import numpy as np
 
 from sglang.srt.managers.io_struct import (
     BatchEmbeddingOutput,
@@ -66,7 +68,56 @@ class DecodeStatus:
     read_offset: int
     # Offset that's sent to tokenizer for incremental update.
     sent_offset: int = 0
-
+    
+class PerformanceTracker:
+    
+    def __init__(self):
+        self.start_time = None
+        
+        self.time_per_report_step = 5
+        
+        self.process_tokens = 0
+        self.req_itl_tracker = dict[str, list[float]]()
+        
+    def report_throughput(self, report_time: float):
+        duration = report_time - self.start_time
+        throughput = self.process_tokens / duration
+        print(f"Throughput: {throughput:.1f} tokens/s")
+    
+    def step(self, rids):
+        cur_time = time.perf_counter()
+        for rid in rids:
+            if rid not in self.req_itl_tracker:
+                self.req_itl_tracker[rid] = [cur_time]
+            self.req_itl_tracker[rid].append(cur_time)
+            
+        if self.start_time is None:
+            self.start_time = cur_time
+        elif cur_time - self.start_time >= self.time_per_report_step:
+            self.report_throughput(cur_time)
+            self.start_time = time.perf_counter()
+            
+    def report_itl(self):
+        
+        request_latencies = []
+        
+        for rid, timestamps in self.req_itl_tracker.items():
+            if len(timestamps) < 2:
+                continue
+            
+            ts = np.array(timestamps)
+            latencies = np.diff(ts)
+            request_latencies.append(latencies)
+        
+        if len(request_latencies) > 0:
+            all_latencies = np.concatenate(request_latencies)
+            itl_stats = {
+                "mean": float(np.mean(all_latencies)),
+                "median": float(np.median(all_latencies)),
+                "p99": float(np.percentile(all_latencies, 99)),
+                "count": int(len(all_latencies)),
+            }
+            print(f"ITL stats: {itl_stats}")
 
 class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
     """DetokenizerManager is a process that detokenizes the token ids."""
