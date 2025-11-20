@@ -71,53 +71,54 @@ class DecodeStatus:
     
 class PerformanceTracker:
     
-    def __init__(self):
+    def __init__(self, time_per_report_step: float = 5):
         self.start_time = None
-        
-        self.time_per_report_step = 5
+        self.time_per_report_step = time_per_report_step
         
         self.process_tokens = 0
-        self.req_itl_tracker = dict[str, list[float]]()
+        self.itls = []
+        self.req_token_tracker = dict[str, list[float]]()
         
-    def report_throughput(self, report_time: float):
+    def report_throughput(self, report_time: float | None = None):
+        if report_time is None:
+            report_time = time.perf_counter()
         duration = report_time - self.start_time
         throughput = self.process_tokens / duration
-        print(f"Throughput: {throughput:.1f} tokens/s")
+        return throughput
+    
+    def report_itl(self):
+        if len(self.itls) == 0:
+            return None
+        
+        all_latencies = np.array(self.itls)
+        itl_stats = {
+            "mean": float(np.mean(all_latencies)),
+            "median": float(np.median(all_latencies)),
+            "p99": float(np.percentile(all_latencies, 99)),
+            "count": int(len(all_latencies)),
+        }
+        return itl_stats
     
     def step(self, rids):
         cur_time = time.perf_counter()
+        self.process_tokens += len(rids)
         for rid in rids:
-            if rid not in self.req_itl_tracker:
-                self.req_itl_tracker[rid] = [cur_time]
-            self.req_itl_tracker[rid].append(cur_time)
+            if rid not in self.req_token_tracker:
+                self.req_token_tracker[rid] = [cur_time]
+            else:
+                r = self.req_token_tracker[rid]
+                self.itls.append(cur_time - r[-1])
+                r.append(cur_time)
             
         if self.start_time is None:
             self.start_time = cur_time
         elif cur_time - self.start_time >= self.time_per_report_step:
-            self.report_throughput(cur_time)
+            throughput = self.report_throughput(cur_time)
+            itl_stats = self.report_itl()
             self.start_time = time.perf_counter()
-            
-    def report_itl(self):
-        
-        request_latencies = []
-        
-        for rid, timestamps in self.req_itl_tracker.items():
-            if len(timestamps) < 2:
-                continue
-            
-            ts = np.array(timestamps)
-            latencies = np.diff(ts)
-            request_latencies.append(latencies)
-        
-        if len(request_latencies) > 0:
-            all_latencies = np.concatenate(request_latencies)
-            itl_stats = {
-                "mean": float(np.mean(all_latencies)),
-                "median": float(np.median(all_latencies)),
-                "p99": float(np.percentile(all_latencies, 99)),
-                "count": int(len(all_latencies)),
-            }
-            print(f"ITL stats: {itl_stats}")
+            self.process_tokens = 0
+            self.itls = []
+            logger.warning(f"from Detokenizer Manager, Throughput: {throughput:.1f} tokens/s, ITL stats: {itl_stats}")
 
 class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
     """DetokenizerManager is a process that detokenizes the token ids."""
@@ -160,6 +161,8 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
 
         self.is_tool_call_parser_gpt_oss = server_args.tool_call_parser == "gpt-oss"
         self.disable_tokenizer_batch_decode = server_args.disable_tokenizer_batch_decode
+        
+        self.performance_tracker = PerformanceTracker()
 
     def event_loop(self):
         """The event loop that handles requests"""
@@ -202,7 +205,8 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
 
     def handle_batch_token_id_out(self, recv_obj: BatchTokenIDOutput):
         bs = len(recv_obj.rids)
-
+        
+        self.performance_tracker.step(recv_obj.rids)
         # Initialize decode status
         read_ids, surr_ids = [], []
         for i in range(bs):

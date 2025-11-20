@@ -1564,7 +1564,7 @@ def _wait_and_warmup(
     else:
         _global_state.tokenizer_manager.server_status = ServerStatus.Up
 
-    logger.info("The server is fired up and ready to roll!")
+    logger.warning("The server is fired up and ready to roll!")
 
     if pipe_finish_writer is not None:
         pipe_finish_writer.send("ready")
