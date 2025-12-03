@@ -9,6 +9,7 @@ from torch.nn.parameter import Parameter
 from sglang.srt.custom_op import CustomOp
 from sglang.srt.layers.amx_utils import _amx_process_weight_after_loading
 from sglang.srt.layers.moe import MoeRunner, MoeRunnerBackend, MoeRunnerConfig
+from sglang.srt.layers.moe.moe_runner.deep_gemm import DeepGemmMoeQuantInfo
 from sglang.srt.layers.moe.moe_runner.triton import TritonMoeQuantInfo
 from sglang.srt.layers.quantization.base_config import (
     FusedMoEMethodBase,
@@ -135,9 +136,10 @@ class UnquantizedLinearMethod(LinearMethodBase):
 class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
     """MoE method without quantization."""
 
-    def __init__(self, use_triton_kernels: bool = False):
+    def __init__(self, use_triton_kernels: bool = False, use_deep_gemm: bool = True):
         super().__init__()
         self.use_triton_kernels = use_triton_kernels
+        self.use_deep_gemm = use_deep_gemm
         self.with_bias = False
 
     def create_weights(
@@ -220,11 +222,14 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
     ):
         self.moe_runner_config = moe_runner_config
-        backend = (
-            MoeRunnerBackend.TRITON_KERNELS
-            if self.use_triton_kernels
-            else MoeRunnerBackend.TRITON
-        )
+        if self.use_deep_gemm:
+            backend = MoeRunnerBackend.DEEP_GEMM
+        else:
+            backend = (
+                MoeRunnerBackend.TRITON_KERNELS
+                if self.use_triton_kernels
+                else MoeRunnerBackend.TRITON
+            )
         self.runner = MoeRunner(backend, moe_runner_config)
 
     def apply(
@@ -247,6 +252,19 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
         moe_runner_config = self.moe_runner_config
 
         backend = self.runner.runner_backend
+
+        if backend.is_deep_gemm():
+            if self.with_bias:
+                raise NotImplementedError(
+                    "Deep GEMM MoE does not support bias in unquantized mode."
+                )
+            quant_info = DeepGemmMoeQuantInfo(
+                w13_weight=layer.w13_weight,
+                w2_weight=layer.w2_weight,
+                use_fp8=False,
+            )
+            return self.runner.run(dispatch_output, quant_info)
+
         if backend.is_triton_kernels():
             from sglang.srt.layers.moe.moe_runner.triton_kernels import (
                 TritonKernelsQuantInfo,
