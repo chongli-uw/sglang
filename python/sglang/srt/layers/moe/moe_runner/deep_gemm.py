@@ -212,8 +212,17 @@ class DeepGemmRunnerCore(MoeRunnerCore):
         quant_info: DeepGemmMoeQuantInfo,
         running_state: dict,
     ) -> torch.Tensor:
+        if quant_info.use_fp8:
+            return self._run_masked_gemm_fp8(runner_input, quant_info, running_state)
+        return self._run_masked_gemm_bf16(runner_input, quant_info, running_state)
 
-        from sglang.srt.layers import deep_gemm_wrapper
+    def _run_masked_gemm_fp8(
+        self,
+        runner_input: DeepGemmRunnerInput,
+        quant_info: DeepGemmMoeQuantInfo,
+        running_state: dict,
+    ) -> torch.Tensor:
+
         from sglang.srt.layers.moe.ep_moe.kernels import (
             silu_and_mul_masked_post_quant_fwd,
         )
@@ -324,6 +333,73 @@ class DeepGemmRunnerCore(MoeRunnerCore):
             masked_m,
             expected_m,
         )
+
+        return down_output
+
+    def _run_masked_gemm_bf16(
+        self,
+        runner_input: DeepGemmRunnerInput,
+        quant_info: DeepGemmMoeQuantInfo,
+        running_state: dict,
+    ) -> torch.Tensor:
+
+        hidden_states = runner_input.hidden_states
+        hidden_states_scale = runner_input.hidden_states_scale
+        masked_m = runner_input.masked_m
+        expected_m = runner_input.expected_m
+
+        w13_weight = quant_info.w13_weight
+        w2_weight = quant_info.w2_weight
+
+        hidden_states_device = running_state["hidden_states_device"]
+
+        num_groups, m, _ = hidden_states.shape
+        n = w13_weight.size(1)
+        assert (
+            n % 2 == 0
+        ), f"w13 output dimension must be even for silu_and_mul, got {n}"
+
+        gateup_output = torch.empty(
+            (num_groups, m, n), device=hidden_states_device, dtype=torch.bfloat16
+        )
+        deep_gemm_wrapper.grouped_gemm_nt_bf16bf16bf16_masked(
+            hidden_states,
+            w13_weight,
+            gateup_output,
+            masked_m,
+            expected_m,
+        )
+        dispose_tensor(hidden_states)
+        if hidden_states_scale is not None:
+            dispose_tensor(hidden_states_scale)
+
+        down_input = torch.empty(
+            (num_groups, m, n // 2),
+            device=hidden_states_device,
+            dtype=torch.bfloat16,
+        )
+        if _is_npu or _is_hip:
+            gate, up = torch.split(gateup_output, n // 2, dim=-1)
+            down_input.copy_(torch.silu(gate) * up)
+        else:
+            silu_and_mul(
+                gateup_output.view(-1, n),
+                down_input.view(-1, n // 2),
+            )
+        del gateup_output
+
+        n = w2_weight.shape[1]
+        down_output = torch.empty(
+            (num_groups, m, n), device=hidden_states_device, dtype=torch.bfloat16
+        )
+        deep_gemm_wrapper.grouped_gemm_nt_bf16bf16bf16_masked(
+            down_input,
+            w2_weight,
+            down_output,
+            masked_m,
+            expected_m,
+        )
+        dispose_tensor(down_input)
 
         return down_output
 
