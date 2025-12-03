@@ -639,6 +639,7 @@ class MHATokenToKVPool(KVCache):
         )
 
     def _create_buffers(self):
+        logger.warning(f"MHATokenToKVPool _create_buffers: size {self.size}, page_size {self.page_size}, head_num {self.head_num}, head_dim {self.head_dim}, layer_num {self.layer_num}, device {self.device}")
         with self.memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE):
             with (
                 torch.cuda.use_mem_pool(self.custom_mem_pool)

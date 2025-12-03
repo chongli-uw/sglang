@@ -278,7 +278,7 @@ class SchedulerProfilerMixin:
             self.torch_profiler_output_dir,
             merge_message,
         )
-        logger.info(f"Profiled batch size: {self.profile_batch_size}")
+        logger.warning(f"Profiled batch size: {self.profile_batch_size}")
         self.profile_batch_size = []
         self.torch_profiler = None
         self.profile_in_progress = False
