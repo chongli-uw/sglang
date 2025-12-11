@@ -1324,6 +1324,7 @@ class ProfileReqInput(BaseReq):
     # If set, it profile as many as this number of steps.
     # If it is set, profiling is automatically stopped after this step, and
     # the caller doesn't need to run stop_profile.
+    start_min_batch_size: Optional[int] = None
     start_step: Optional[int] = None
     num_steps: Optional[int] = None
     activities: Optional[List[str]] = None

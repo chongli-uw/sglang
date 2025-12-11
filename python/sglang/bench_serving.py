@@ -619,7 +619,7 @@ async def async_request_profile(api_url: str) -> RequestFuncOutput:
                 "activities": getattr(args, "profile_activities", []),
                 "num_steps": getattr(args, "profile_num_steps", 0),
                 "start_step": getattr(args, "profile_start_step", 0),
-                "start_min_batch_size": getattr(args, "profile_start_min_batch_size", 128),
+                # "start_min_batch_size": getattr(args, "profile_start_min_batch_size", 128),
             }
             async with session.post(url=api_url, json=body) as response:
                 if response.status == 200:

@@ -87,12 +87,13 @@ class SchedulerProfilerMixin:
                 self.profiler_target_decode_ct = num_steps
                 self.profiler_prefill_ct = 0
                 self.profiler_decode_ct = 0
+            elif start_min_batch_size:
+                self.profile_start_min_batch_size = start_min_batch_size
+                logger.warning(f"Init profile: profile start min batch size: {self.profile_start_min_batch_size}")
             elif start_step:
                 self.profiler_target_forward_ct = (
                     self.profiler_start_forward_ct + num_steps
                 )
-            elif start_min_batch_size:
-                self.profile_start_min_batch_size = start_min_batch_size
             else:
                 self.profiler_target_forward_ct = self.forward_ct + num_steps
             # The caller will be notified when reaching profiler_target_forward_ct
@@ -310,11 +311,14 @@ class SchedulerProfilerMixin:
             else:
                 raise RuntimeError(f"unsupported profile stage: {batch.forward_mode}")
         elif self.profile_start_min_batch_size:
-            if batch.batch_size() >= self.profile_start_min_batch_size:
+            if not self.profile_in_progress and batch.batch_size() >= self.profile_start_min_batch_size:
+                logger.warning(f"Start profile: batch size: {batch.batch_size()}, profile start min batch size: {self.profile_start_min_batch_size}")
                 self.start_profile()
-                self.profile_target_forward_ct = self.forward_ct + self.profile_steps
-            if self.forward_ct >= self.profile_target_forward_ct:
+                self.profiler_target_forward_ct = self.forward_ct + self.profile_steps
+            if self.profile_in_progress and self.forward_ct >= self.profiler_target_forward_ct:
                 self.stop_profile()
+                self.profile_start_min_batch_size = None
+                self.profiler_target_forward_ct = None
         else:
             # Check profiler
             if (
