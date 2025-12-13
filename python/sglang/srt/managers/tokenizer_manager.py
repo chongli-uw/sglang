@@ -905,14 +905,14 @@ class TokenizerManager:
         paras_dp_size = self.server_args.tp_size // self.server_args.paras_tp_size
         for comm in self.communicators:
             comm._fan_out = paras_dp_size
-        # self.paras_configure_communicator._fan_out = self.server_args.tp_size // self.server_args.paras_tp_size
+        self.health_check_communitcator._fan_out = 1 # health check is special, deprecated
         await self.paras_configure_communicator(ParaSConfigureReq.CONFIGURE_TP)
 
     async def paras_configure_ep(self):
         self.auto_create_handle_loop()
         for comm in self.communicators:
             comm._fan_out = self.server_args.dp_size
-        self.health_check_communitcator._fan_out = 1 # health check is special
+        self.health_check_communitcator._fan_out = 1 # health check is special, deprecated
         await self.paras_configure_communicator(ParaSConfigureReq.CONFIGURE_EP)
 
     async def update_weights_from_disk(

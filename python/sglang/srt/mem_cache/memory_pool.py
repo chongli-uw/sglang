@@ -504,7 +504,11 @@ class MHATokenToKVPool(KVCache):
             device=self.device,
         )
         self.size = self.k_buffer[0].shape[0] - self.page_size
-
+        
+    def paras_resize_cache(self, layer_id: int, new_size: int, new_head_num: int):
+        self.k_buffer[layer_id-self.start_layer] = torch.empty(new_size + self.page_size, new_head_num, self.head_dim, dtype=self.store_dtype, device=self.device)
+        self.v_buffer[layer_id-self.start_layer] = torch.empty(new_size + self.page_size, new_head_num, self.head_dim, dtype=self.store_dtype, device=self.device)
+    
     @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
         # ParaS: Reshape kv cache from EP to TP.
@@ -518,6 +522,7 @@ class MHATokenToKVPool(KVCache):
             self.v_buffer[i] = self.v_buffer[i].view(
                 (-1, sharded_head_num, self.head_dim)
             )
+        self.head_num = sharded_head_num
 
     @paras_func
     def paras_configure_ep(self):

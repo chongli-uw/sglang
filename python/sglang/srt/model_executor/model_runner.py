@@ -1355,23 +1355,18 @@ class ModelRunner:
 
     def paras_configure_helper(self):
         # reconfigure token_to_kv_pool_allocator
-        assert isinstance(self.token_to_kv_pool_allocator, TokenToKVPoolAllocator)
-        self.max_total_num_tokens = self.token_to_kv_pool.paras_get_num_kv_slots()
-        self.token_to_kv_pool_allocator.paras_resize_and_clear(self.max_total_num_tokens)
-
-        if self.server_args.max_running_requests is None:
-            max_num_reqs = self.server_args.max_running_requests
-            if max_num_reqs is None:
-                max_num_reqs = min(
-                    max(
-                        int(
-                            self.max_total_num_tokens / self.model_config.context_len * 512
-                        ),
-                        2048,
-                    ),
-                    4096,
-                )
-        self.req_to_token_pool.paras_resize_and_clear(max_num_reqs)
+        pass
+    
+        # if max_num_reqs is None:
+        # max_num_reqs = min(
+        #     max(
+        #         int(
+        #             self.max_total_num_tokens / self.model_config.context_len * 512
+        #         ),
+        #         2048,
+        #     ),
+        #     4096,
+        # )
 
     @paras_func
     def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
@@ -1380,8 +1375,8 @@ class ModelRunner:
         )
         if paras_tp_rank == 0:
             paras_memory_check("before paras_configure_tp")
-        assert isinstance(self.token_to_kv_pool, MHATokenToKVPool)
-        self.token_to_kv_pool.paras_configure_tp(paras_tp_size, paras_tp_rank)
+        # assert isinstance(self.token_to_kv_pool, MHATokenToKVPool)
+        # self.token_to_kv_pool.paras_configure_tp(paras_tp_size, paras_tp_rank)
         paras_comm_configure_tp()
         from sglang.srt.models.qwen3_moe import Qwen3MoeForCausalLM
         assert isinstance(self.model, Qwen3MoeForCausalLM), (
