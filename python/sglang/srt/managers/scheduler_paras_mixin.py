@@ -1,4 +1,5 @@
-from types import SimpleNamespace, List, Any, Optional
+from types import SimpleNamespace
+from typing import List, Any, Optional
 import torch
 import logging
 import torch
@@ -104,6 +105,7 @@ class SchedulerParasMixin:
             return
         
         assert self.server_args.enable_paras_moe, "ParaS parallelism is not enabled."
+        assert not self.enable_overlap, "Overlap schedule is not supported currently in ParaS."
         # switch from EP to DP x TP
         self.paras_parallelism_config = "TP"
         self.server_args.enable_dp_attention = False
@@ -111,18 +113,27 @@ class SchedulerParasMixin:
         global_server_args_dict["enable_dp_attention"] = False
         global_server_args_dict["enable_torch_a2a_moe"] = False
         
+        self.tree_cache.reset()
         local_reqs = self.paras_get_local_reqs()
         paras_gather_manager = ParaSReqGatherManager(
-            local_reqs, 
+            local_reqs,
+            self.paras_tp_group,
             self.req_to_token_pool, 
             self.token_to_kv_pool_allocator
         )
         # TODO: clean radix attention cache
-        
         paras_gather_manager.gather_global_reqs()
         paras_gather_manager.reorchestrate_cache()
         paras_gather_manager.gather_cache()
-        
+        self.running_batch = paras_gather_manager.get_new_running_batch(
+            self.tree_cache,
+            self.model_config,
+            self.enable_overlap,
+            self.spec_algorithm,
+            self.server_args.enable_custom_logit_processor
+        )
+        # paras_gather_manager.update_running_batch_inplace(self.running_batch)
+    
         self.tp_worker.paras_configure_tp(self.paras_tp_size, self.paras_tp_rank)
 
         # drop-in replacement for scheduler tp configs 

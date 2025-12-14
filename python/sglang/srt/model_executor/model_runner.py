@@ -1354,8 +1354,9 @@ class ModelRunner:
         ShardedStateLoader.save_model(self.model, path, pattern, max_size)
 
     def paras_configure_helper(self):
-        # reconfigure token_to_kv_pool_allocator
-        pass
+        # reconfigure token_to_kv_pool_allocator, cache related stuffs are configured in scheduler (paras gather manager)
+        self.max_total_num_tokens = self.token_to_kv_pool_allocator.size
+        self.max_running_requests = self.req_to_token_pool.size
     
         # if max_num_reqs is None:
         # max_num_reqs = min(

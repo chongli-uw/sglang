@@ -5,7 +5,6 @@ import pickle
 import numpy as np
 import torch.distributed as dist
 from typing import List
-from sglang.srt.managers.schedule_batch import Req
 
 def print_nvml_mem_for_torch_device(device_id: int):
     """
@@ -99,42 +98,3 @@ class ParaSWeightBuffer:
         torch.cuda.empty_cache()
 
 paras_weight_buffer = ParaSWeightBuffer()
-
-def paras_tp_group_all_gather_reqs(
-    reqs: List[Req],
-    group: torch.distributed.ProcessGroup,
-) -> Tuple[List[Req], List[int]]:
-    device = torch.device("cuda")
-    
-    num_ranks = group.size()
-    
-    serialized_data = pickle.dumps(reqs)
-    size = len(serialized_data)
-    tensor_data = torch.ByteTensor(
-        np.frombuffer(serialized_data, dtype=np.uint8)
-    ).to(device)
-    tensor_size = torch.tensor([size], dtype=torch.long, device=device)
-    
-    gathered_size = torch.empty(group.size(), dtype=torch.long, device=device)
-    gathered_size_list = gathered_size.tolist()
-    dist.all_gather_into_tensor(gathered_size, tensor_size, group=group)
-    
-    max_size = gathered_size.max().item()
-    if max_size == 0:
-        return []
-    
-    gathered_data: torch.Tensor = torch.empty((max_size * num_ranks), dtype=torch.uint8, device=device)
-    dist.all_gather_into_tensor(gathered_data, tensor_data, group=group)
-    
-    serialized_data_per_rank = np.split(gathered_data.cpu().numpy(), num_ranks, axis=0)
-    
-    gathered_reqs = []
-    split_sizes = []
-    for i in range(num_ranks):
-        data = serialized_data_per_rank[i]
-        effective_size = gathered_size_list[i]
-        remote_reqs = pickle.loads(data[:effective_size])
-        gathered_reqs.extend(remote_reqs)
-        split_sizes.append(len(remote_reqs))
-    
-    return gathered_reqs, split_sizes
