@@ -374,7 +374,7 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
         super().__init__(layer_id, config, quant_config, prefix)
 
         # For ParaS, we start with torch A2A EP and switch to TP at a certain point
-        assert global_server_args_dict["enable_torch_a2a_moe"] and not global_server_args_dict["enable_deepep_moe"]
+        assert global_server_args_dict["enable_torch_a2a_moe"] or global_server_args_dict["enable_deepep_moe"]
         self.num_global_experts = config.num_experts
         self.num_local_experts = self.num_global_experts // self.tp_size
         self.hidden_size = config.hidden_size
@@ -403,7 +403,10 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
         self, hidden_states: torch.Tensor, forward_batch: Optional[ForwardBatch] = None
     ) -> torch.Tensor:
         if self.paralleism_config == "ep":
-            return self.forward_torch_a2a(hidden_states, forward_batch)
+            if global_server_args_dict["enable_deepep_moe"]:
+                return self.forward_deepep(hidden_states, forward_batch)
+            elif global_server_args_dict["enable_torch_a2a_moe"]:
+                return self.forward_torch_a2a(hidden_states, forward_batch)
         else:
             return self.forward_normal(hidden_states)
 

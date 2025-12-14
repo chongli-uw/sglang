@@ -199,6 +199,9 @@ class _DeepEPDispatcherImplBase:
         )
 
         self.handle = None
+        
+    def enable_deep_gemm(self) -> bool:
+        return self.params_dtype.itemsize == 1 and deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
 
     def dispatch_a(
         self,
@@ -232,6 +235,7 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
 
         self.async_finish = async_finish
         self.src2dst = None
+        
 
     def dispatch_a(
         self,
@@ -240,14 +244,14 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
         topk_weights: torch.Tensor,
     ):
         topk_idx = topk_idx.to(torch.int64)
-        if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
+        if self.enable_deep_gemm():
             # TODO hard code 128 block quant,use fp8 communication
             hidden_states = sglang_per_token_group_quant_fp8(hidden_states, 128)
         previous_event = Buffer.capture() if self.async_finish else None
         return hidden_states, topk_idx, topk_weights, previous_event
 
     def dispatch_b(self, hidden_states, topk_idx, topk_weights, previous_event):
-        if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
+        if self.enable_deep_gemm():
             (
                 hidden_states,
                 topk_idx,
@@ -349,7 +353,7 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
             previous_event=previous_event,
             async_finish=self.async_finish,
             allocate_on_comm_stream=(previous_event is not None) and self.async_finish,
-            expert_alignment=128 if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM else 1,
+            expert_alignment=128 if self.enable_deep_gemm() else 1,
             config=DeepEPConfig.get_instance().normal_dispatch_config,
         )
 
@@ -413,7 +417,7 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
     ):
-        if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
+        if self.enable_deep_gemm():
             output = hidden_states
         else:
             if hidden_states.shape[0] > 0:
@@ -556,9 +560,9 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
                 use_fp8=use_fp8,
                 async_finish=not self.return_recv_hook,
                 return_recv_hook=self.return_recv_hook,
-                round_scale=deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+                round_scale=self.enable_deep_gemm()
                 and deep_gemm_wrapper.DEEPGEMM_BLACKWELL,
-                use_ue8m0=deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+                use_ue8m0=self.enable_deep_gemm()
                 and deep_gemm_wrapper.DEEPGEMM_BLACKWELL,
             )
         )
