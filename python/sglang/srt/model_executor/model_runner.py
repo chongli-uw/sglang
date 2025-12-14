@@ -625,14 +625,14 @@ class ModelRunner:
             ) from None
 
         # measure model offloading time
-        torch.cuda.synchronize()
-        start_offload = time.time()
-        cpu_model = self.model.to("cpu", dtype=self.dtype)
-        torch.cuda.synchronize()
-        end_offload = time.time()
-        logger.info(
-            f"Offload model to CPU in {end_offload - start_offload:.2f} seconds"
-        )
+        # torch.cuda.synchronize()
+        # start_offload = time.time()
+        # cpu_model = self.model.to("cpu", dtype=self.dtype)
+        # torch.cuda.synchronize()
+        # end_offload = time.time()
+        # logger.info(
+        #     f"Offload model to CPU in {end_offload - start_offload:.2f} seconds"
+        # )
 
     def update_expert_location(
         self,
