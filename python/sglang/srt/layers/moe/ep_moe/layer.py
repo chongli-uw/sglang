@@ -577,6 +577,14 @@ class EPMoE(torch.nn.Module):
                 # If we are in the row parallel case (down_proj)
                 else:
                     param_data[expert_id] = loaded_weight
+                    
+    def paras_drop_params(self, params_name):
+        assert params_name in [
+            "w13_weight",
+            "w2_weight",
+        ], f"Unsupported parameter name: {params_name}"
+        if params_name in self._parameters:
+            del self._parameters[params_name]
 
 class UnquantizedEPMoEMethod(FusedMoEMethodBase, CustomOp):
 
@@ -1086,14 +1094,6 @@ class A2AEPMoE(EPMoE):
                 del self._parameters["w2_weight"]
             self.register_parameter("w2_weight", w2_weight)
             set_weight_attrs(w2_weight, self.extra_weight_attrs)
-
-    def paras_drop_params(self, params_name):
-        assert params_name in [
-            "w13_weight",
-            "w2_weight",
-        ], f"Unsupported parameter name: {params_name}"
-        if params_name in self._parameters:
-            del self._parameters[params_name]
 
 class PplxEPMoE(EPMoE):
     """

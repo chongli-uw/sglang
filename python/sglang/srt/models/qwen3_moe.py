@@ -436,11 +436,11 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
                 self.num_local_experts *= paras_dp_size
             else:
                 w13_ep_gathered = self.ep_experts.w13_weight.data.view(self.num_local_experts, 2 * self.moe_intermediate_size, self.hidden_size)
-                paras_weight_buffer.put(w13_ep_gathered)
+                self.w13_ep_gathered = w13_ep_gathered
                 self.ep_experts.paras_drop_params("w13_weight")
 
                 w2_ep_gathered = self.ep_experts.w2_weight.data.view(self.num_local_experts, self.hidden_size, self.moe_intermediate_size)
-                paras_weight_buffer.put(w2_ep_gathered)
+                self.w2_ep_gathered = w2_ep_gathered
                 self.ep_experts.paras_drop_params("w2_weight")
         
         if async_op:
