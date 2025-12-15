@@ -313,6 +313,8 @@ class _DeepEPDispatcherImplBase:
         # DeepEP internode_ll dispatch uses FINISHED_SUM_TAG=1024
         # and the logic requires num-tokens-sent-from-one-rank-to-another-rank less than it
         assert self.num_max_dispatch_tokens_per_rank <= 1024
+        
+        self.dispatch_in_fp8 = not get_bool_env_var("SGLANG_DEEPEP_BF16_DISPATCH")
 
         self.handle = None
 
@@ -359,6 +361,7 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
         topk_ids = topk_ids.to(torch.int64)
         if (
             deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+            and self.dispatch_in_fp8
             and not get_moe_runner_backend().is_cutlass()
         ):
             # TODO hard code 128 block quant,use fp8 communication
@@ -585,7 +588,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
         input_global_scale = self.quant_config.get("input_global_scale", None)
         if input_global_scale is not None:
             use_nvfp4 = True
-        elif not get_bool_env_var("SGLANG_DEEPEP_BF16_DISPATCH"):
+        elif self.dispatch_in_fp8:
             use_fp8 = True
 
         buffer = self._get_buffer()

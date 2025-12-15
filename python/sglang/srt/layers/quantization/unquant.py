@@ -136,7 +136,7 @@ class UnquantizedLinearMethod(LinearMethodBase):
 class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
     """MoE method without quantization."""
 
-    def __init__(self, use_triton_kernels: bool = False, use_deep_gemm: bool = True):
+    def __init__(self, use_triton_kernels: bool = True, use_deep_gemm: bool = False):
         super().__init__()
         self.use_triton_kernels = use_triton_kernels
         self.use_deep_gemm = use_deep_gemm

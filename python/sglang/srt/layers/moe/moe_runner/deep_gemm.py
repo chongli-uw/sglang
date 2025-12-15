@@ -128,6 +128,16 @@ class DeepGemmRunnerCore(MoeRunnerCore):
         quant_info: DeepGemmMoeQuantInfo,
         running_state: dict,
     ) -> torch.Tensor:
+        if quant_info.use_fp8:
+            return self._run_contiguous_gemm_fp8(runner_input, quant_info, running_state)
+        return self._run_contiguous_gemm_bf16(runner_input, quant_info, running_state)
+
+    def _run_contiguous_gemm_fp8(
+        self,
+        runner_input: DeepGemmRunnerInput,
+        quant_info: DeepGemmMoeQuantInfo,
+        running_state: dict,
+    ) -> torch.Tensor:
 
         from sglang.srt.layers.moe.ep_moe.kernels import tma_align_input_scale
         from sglang.srt.layers.quantization.fp8_kernel import (
@@ -203,6 +213,72 @@ class DeepGemmRunnerCore(MoeRunnerCore):
             down_output,
             m_indices,
         )
+
+        return down_output
+
+    def _run_contiguous_gemm_bf16(
+        self,
+        runner_input: DeepGemmRunnerInput,
+        quant_info: DeepGemmMoeQuantInfo,
+        running_state: dict,
+    ) -> torch.Tensor:
+
+        hidden_states = runner_input.hidden_states
+        hidden_states_scale = runner_input.hidden_states_scale
+        all_tokens = running_state["all_tokens"]
+        hidden_states_device = running_state["hidden_states_device"]
+        hidden_states_shape = running_state["hidden_states_shape"]
+        m_indices = runner_input.m_indices
+
+        w13_weight = quant_info.w13_weight
+        w2_weight = quant_info.w2_weight
+
+        N = w13_weight.size(1)
+        K = hidden_states_shape[1]
+        assert (
+            N % 2 == 0
+        ), f"w13 output dimension must be even for silu_and_mul, got {N}"
+
+        gateup_output = torch.empty(
+            (all_tokens, N),
+            device=hidden_states_device,
+            dtype=torch.bfloat16,
+        )
+        deep_gemm_wrapper.grouped_gemm_nt_bf16bf16bf16_contig(
+            hidden_states,
+            w13_weight,
+            gateup_output,
+            m_indices,
+        )
+
+        dispose_tensor(hidden_states)
+        if hidden_states_scale is not None:
+            dispose_tensor(hidden_states_scale)
+
+        down_input = torch.empty(
+            (all_tokens, N // 2),
+            device=hidden_states_device,
+            dtype=torch.bfloat16,
+        )
+        if _is_npu or _is_hip:
+            gate, up = torch.split(gateup_output, N // 2, dim=-1)
+            down_input.copy_(torch.silu(gate) * up)
+        else:
+            silu_and_mul(gateup_output.view(-1, N), down_input.view(-1, N // 2))
+        del gateup_output
+
+        down_output = torch.empty(
+            (all_tokens, K),
+            device=hidden_states_device,
+            dtype=torch.bfloat16,
+        )
+        deep_gemm_wrapper.grouped_gemm_nt_bf16bf16bf16_contig(
+            down_input,
+            w2_weight,
+            down_output,
+            m_indices,
+        )
+        dispose_tensor(down_input)
 
         return down_output
 
@@ -609,6 +685,9 @@ def pre_permute_deepep_normal_to_deep_gemm(
             device="cpu",
         ).cuda(non_blocking=True)
     expert_start_loc = torch.empty_like(num_recv_tokens_per_expert_gpu)
+    
+    if hidden_states_scale is None:
+        hidden_states_scale = torch.ones_like(input_tensor_scale)
 
     ep_scatter(
         hidden_states,

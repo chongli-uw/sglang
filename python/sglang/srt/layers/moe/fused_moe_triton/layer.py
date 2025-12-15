@@ -209,7 +209,7 @@ class FusedMoE(torch.nn.Module):
         if quant_config is not None:
             self.quant_method = quant_config.get_quant_method(self, prefix)
         if self.quant_method is None:
-            self.quant_method = UnquantizedFusedMoEMethod(self.use_triton_kernels)
+            self.quant_method = UnquantizedFusedMoEMethod(self.use_triton_kernels, use_deep_gemm=(self.moe_ep_size > 1))
 
         self.quant_method.create_weights(
             layer=self,
