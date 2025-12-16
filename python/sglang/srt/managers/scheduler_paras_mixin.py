@@ -3,6 +3,7 @@ from typing import List, Any, Optional
 import torch
 import logging
 import torch
+import time
 
 from sglang.srt.managers.io_struct import ParaSConfigureReq, ParaSConfigureReqOutput
 from sglang.srt.managers.schedule_batch import (
@@ -115,14 +116,23 @@ class SchedulerParasMixin:
         
         self.tree_cache.reset()
         local_reqs = self.paras_get_local_reqs()
+        
+        # self.paras_start_profile("paras_configure_tp")
+        
         paras_gather_manager = ParaSReqGatherManager(
             local_reqs,
             self.paras_tp_group,
             self.req_to_token_pool, 
             self.token_to_kv_pool_allocator
         )
-        # TODO: clean radix attention cache
+        
+        req_gather_start_time = time.time()
         paras_gather_manager.gather_global_reqs()
+        req_gather_end_time = time.time()
+        req_cost_ms = (req_gather_end_time - req_gather_start_time) * 1000
+        logger.info(f"Time taken to gather requests: {req_cost_ms} ms")
+        
+        cache_gather_start_time = time.time()
         paras_gather_manager.reorchestrate_cache()
         paras_gather_manager.gather_cache()
         self.running_batch = paras_gather_manager.get_new_running_batch(
@@ -133,8 +143,20 @@ class SchedulerParasMixin:
             self.server_args.enable_custom_logit_processor
         )
         # paras_gather_manager.update_running_batch_inplace(self.running_batch)
-    
+        cache_gather_end_time = time.time()
+        cache_cost_ms = (cache_gather_end_time - cache_gather_start_time) * 1000
+        logger.info(f"Time taken to gather cache: {cache_cost_ms} ms")
+        
+        weights_transfer_start_time = time.time()
         self.tp_worker.paras_configure_tp(self.paras_tp_size, self.paras_tp_rank)
+        weights_transfer_end_time = time.time()
+        weights_transfer_cost_ms = (weights_transfer_end_time - weights_transfer_start_time) * 1000
+        logger.info(f"Time taken to transfer weights: {weights_transfer_cost_ms} ms")
+        
+        total_cost_ms = req_cost_ms + cache_cost_ms + weights_transfer_cost_ms
+        logger.info(f"Total time taken to configure TP: {total_cost_ms} ms")
+        
+        # self.paras_stop_profile()
 
         # drop-in replacement for scheduler tp configs 
         self.tp_size = self.paras_tp_size
@@ -203,7 +225,7 @@ class SchedulerParasMixin:
             raise ValueError("Unrecognized ParaSConfigureReq value")
         return ParaSConfigureReqOutput()
     
-    def paras_start_profile(self, op_name: str):
+    def paras_start_profile(self, op_name: str = "paras_configure"):
         self.profiler = torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
