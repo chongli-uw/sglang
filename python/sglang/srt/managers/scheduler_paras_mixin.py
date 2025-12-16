@@ -20,6 +20,19 @@ from sglang.srt.paras.gather_manager import ParaSReqGatherManager
 
 logger = logging.getLogger(__name__)
 
+class TimeReporter:
+    def __init__(self, op_name: str):
+        self.op_name = op_name
+        
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        end_time = time.time()
+        cost_ms = (end_time - self.start_time) * 1000
+        logger.info(f"Time taken to {self.op_name}: {cost_ms} ms")
+
 class SchedulerParasMixin:
     """
     This class implements the parallel configuration logic for Scheduler.
@@ -126,15 +139,17 @@ class SchedulerParasMixin:
             self.token_to_kv_pool_allocator
         )
         
-        req_gather_start_time = time.time()
-        paras_gather_manager.gather_global_reqs()
-        req_gather_end_time = time.time()
-        req_cost_ms = (req_gather_end_time - req_gather_start_time) * 1000
-        logger.info(f"Time taken to gather requests: {req_cost_ms} ms")
+        start_time = time.time()
         
-        cache_gather_start_time = time.time()
-        paras_gather_manager.reorchestrate_cache()
-        paras_gather_manager.gather_cache()
+        with TimeReporter("gather_global_reqs"):
+            paras_gather_manager.gather_global_reqs()
+        
+        with TimeReporter("reorchestrate_cache"):
+            paras_gather_manager.reorchestrate_cache()
+        
+        with TimeReporter("gather_cache"):
+            paras_gather_manager.gather_cache()
+        
         self.running_batch = paras_gather_manager.get_new_running_batch(
             self.tree_cache,
             self.model_config,
@@ -143,19 +158,13 @@ class SchedulerParasMixin:
             self.server_args.enable_custom_logit_processor
         )
         # paras_gather_manager.update_running_batch_inplace(self.running_batch)
-        cache_gather_end_time = time.time()
-        cache_cost_ms = (cache_gather_end_time - cache_gather_start_time) * 1000
-        logger.info(f"Time taken to gather cache: {cache_cost_ms} ms")
+
+        with TimeReporter("transfer_weights"):
+            self.tp_worker.paras_configure_tp(self.paras_tp_size, self.paras_tp_rank)
         
-        weights_transfer_start_time = time.time()
-        self.tp_worker.paras_configure_tp(self.paras_tp_size, self.paras_tp_rank)
-        weights_transfer_end_time = time.time()
-        weights_transfer_cost_ms = (weights_transfer_end_time - weights_transfer_start_time) * 1000
-        logger.info(f"Time taken to transfer weights: {weights_transfer_cost_ms} ms")
-        
-        total_cost_ms = req_cost_ms + cache_cost_ms + weights_transfer_cost_ms
-        logger.info(f"Total time taken to configure TP: {total_cost_ms} ms")
-        
+        end_time = time.time()
+        cost_ms = (end_time - start_time) * 1000
+        logger.info(f"Time taken to configure TP: {cost_ms} ms")
         # self.paras_stop_profile()
 
         # drop-in replacement for scheduler tp configs 
