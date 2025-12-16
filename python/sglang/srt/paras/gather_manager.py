@@ -93,9 +93,10 @@ class ParaSReqGatherManager:
         self.group_size = gather_group.world_size
         
         self.local_no_reqs = len(local_reqs) == 0
+        self.local_seqlens_list = [req.seqlen for req in local_reqs]
+        self.num_local_tokens = sum(self.local_seqlens_list) - len(local_reqs) # the last output token is not stored in kv cache
         
         if self.local_no_reqs:
-            self.local_seqlens_list = []
             self.local_token_indices = None
         else:
             req_to_token_indices = []
@@ -103,10 +104,9 @@ class ParaSReqGatherManager:
                 indices = self.req_to_token_pool.req_to_token[req.req_pool_idx][ : req.seqlen - 1]
                 req_to_token_indices.append(indices)
 
-            self.local_seqlens_list = [req.seqlen for req in local_reqs]
             self.local_token_indices = torch.cat(req_to_token_indices, dim=0)
-            
-        self.num_local_tokens = sum(self.local_seqlens_list)
+            assert self.local_token_indices.shape[0] == self.num_local_tokens, \
+                f"local tokens {self.num_local_tokens}, local token indices {self.local_token_indices.shape}"
     
     def gather_global_reqs(self):
         self.global_reqs, self.global_reqs_split_sizes = paras_tp_group_all_gather_reqs(self.local_reqs, self.gather_group)
@@ -116,7 +116,7 @@ class ParaSReqGatherManager:
         self.global_num_tokens = []
         for split_size in self.global_reqs_split_sizes:
             end_index = start_index + split_size
-            self.global_num_tokens.append(sum(self.global_seqlens_list[start_index:end_index]))
+            self.global_num_tokens.append(sum(self.global_seqlens_list[start_index:end_index]) - split_size)
             start_index = end_index
             
         self.num_global_tokens = sum(self.global_num_tokens)
@@ -153,17 +153,18 @@ class ParaSReqGatherManager:
             start_index = 0
             # TODO: optimize writing to req_to_token_pool and token_to_kv_pool_allocator
             for req, req_pool_idx in zip(self.global_reqs, req_pool_indices):
-                end_index = start_index + req.seqlen
+                end_index = start_index + req.seqlen - 1
                 req.req_pool_idx = req_pool_idx
                 token_indices = global_token_indices[start_index:end_index]
-                self.req_to_token_pool.write((req_pool_idx, slice(0, req.seqlen)), token_indices)
+                self.req_to_token_pool.write((req_pool_idx, slice(0, req.seqlen - 1)), token_indices)
                 new_token_indices.extend(token_indices)
                 start_index = end_index
                 
             self.global_token_indices = global_token_indices
+            assert self.global_token_indices.shape[0] == self.num_global_tokens, "The number of global tokens is not equal to the number of tokens in the global requests."
         else:
             self.global_token_indices = None
-    
+
     def gather_cache(self) -> torch.Tensor:
         torch.cuda.empty_cache()
         kv_cache = self.token_to_kv_pool_allocator.get_kvcache()
@@ -174,11 +175,11 @@ class ParaSReqGatherManager:
         num_heads = kv_cache.head_num
         head_dim = kv_cache.head_dim
         sharded_num_heads = num_heads // self.group_size
-        size_per_token = kv_cache.head_num * kv_cache.head_dim * kv_cache.dtype.itemsize
+        size_per_token = kv_cache.head_num * kv_cache.head_dim
         splited_size_per_token = size_per_token // self.group_size
         
-        input_split_sizes = [splited_size_per_token * self.num_local_tokens] * self.group_size
-        output_split_sizes = [(splited_size_per_token * num_tokens_of_rank) for num_tokens_of_rank in self.global_num_tokens]
+        input_split_sizes = [2 * splited_size_per_token * self.num_local_tokens] * self.group_size
+        output_split_sizes = [2 * (splited_size_per_token * num_tokens_of_rank) for num_tokens_of_rank in self.global_num_tokens]
         
         def gather_one_layer(layer_id: int) -> torch.Tensor:
 
@@ -189,21 +190,22 @@ class ParaSReqGatherManager:
                 local_vcache = v_buffer[self.local_token_indices]
                 
                 local_kvcache = torch.stack([local_kcache, local_vcache], dim=0).view(2, -1, kv_cache.head_num, kv_cache.head_dim)
-                permuted_local_kvcache = local_kvcache.permute(2, 0, 1, 3).contiguous() # [num_heads, 2, num_tokens, head_dim]
+                permuted_local_kvcache = local_kvcache.permute(2, 0, 1, 3).contiguous().flatten() # [num_heads, 2, num_tokens, head_dim]
             else:
                 permuted_local_kvcache = torch.empty((0, ), dtype=kv_cache.store_dtype, device=kv_cache.device)
                 
             kv_cache.paras_resize_cache(layer_id, self.new_cache_size, sharded_num_heads)
                 
             if self.num_global_tokens > 0:
+                gathered_kvcache = torch.empty(2 * self.num_global_tokens * splited_size_per_token, dtype=permuted_local_kvcache.dtype, device=permuted_local_kvcache.device)
+                torch.distributed.all_to_all_single(gathered_kvcache, permuted_local_kvcache, output_split_sizes, input_split_sizes, group=self.gather_group.device_group)
+                gathered_kvcache = gathered_kvcache.view(self.num_global_tokens, 2, sharded_num_heads, head_dim)
+                permuted_gathered_kvcache = gathered_kvcache.permute(1, 0, 2, 3).contiguous() # [2, num_global_tokens, sharded_num_heads, head_dim]
+                
                 k_buffer = kv_cache.get_key_buffer(layer_id)
                 v_buffer = kv_cache.get_value_buffer(layer_id)
-                gathered_kvcache = torch.empty(2 * self.num_global_tokens * splited_size_per_token, dtype=permuted_local_kvcache.dtype, device=permuted_local_kvcache.device)
-                torch.distributed.all_to_all_single(gathered_kvcache, permuted_local_kvcache, input_split_sizes, output_split_sizes, group=self.gather_group.device_group)
-                gathered_kvcache = gathered_kvcache.view(2, self.num_global_tokens, sharded_num_heads, head_dim)
-                
-                k_buffer[self.global_token_indices].copy_(gathered_kvcache[0])
-                v_buffer[self.global_token_indices].copy_(gathered_kvcache[1])
+                k_buffer[self.global_token_indices].copy_(permuted_gathered_kvcache[0])
+                v_buffer[self.global_token_indices].copy_(permuted_gathered_kvcache[1])
                 
         
         for layer_id in range(num_layers):
@@ -223,6 +225,7 @@ class ParaSReqGatherManager:
         """
         # Create a ScheduleBatch using init_new
         # tree_cache should be reset to empty state before calling this function
+
         batch = ScheduleBatch.init_new(
             self.global_reqs,
             self.req_to_token_pool,
@@ -234,42 +237,38 @@ class ParaSReqGatherManager:
             enable_custom_logit_processor,
         )
         
+        for req in batch.reqs:
+            req.last_node = batch.tree_cache.root_node
+            
         # Set up decode batch fields
         bs = len(self.global_reqs)
         device = self.req_to_token_pool.device
         
         # Get the last token from each request (for decode input)
         # For decode, input_ids should be the last output token, or last input token if no output yet
-        input_ids_list = []
+        last_token_list = []
         for req in self.global_reqs:
             if len(req.output_ids) > 0:
-                input_ids_list.append(req.output_ids[-1])
+                last_token_list.append(req.output_ids[-1])
             else:
                 # No output yet, use last input token
-                input_ids_list.append(req.origin_input_ids[-1])
+                last_token_list.append(req.origin_input_ids[-1])
         
         # Get req_pool_indices and seq_lens
         req_pool_indices_list = [req.req_pool_idx for req in self.global_reqs]
         seq_lens_list = [req.seqlen for req in self.global_reqs]
         
         # Convert to tensors
-        batch.input_ids = torch.tensor(input_ids_list, dtype=torch.int64, device=device)
+        batch.output_ids = torch.tensor(last_token_list, dtype=torch.int64, device=device)
         batch.req_pool_indices = torch.tensor(req_pool_indices_list, dtype=torch.int64, device=device)
         batch.seq_lens = torch.tensor(seq_lens_list, dtype=torch.int64, device=device)
         batch.seq_lens_sum = sum(seq_lens_list)
-        
-        # Set output_ids to input_ids (will be used by prepare_for_decode)
-        batch.output_ids = batch.input_ids.clone()
         
         # Create sampling_info before prepare_for_decode (it's required by prepare_for_decode)
         batch.sampling_info = SamplingBatchInfo.from_schedule_batch(
             batch,
             model_config.vocab_size,
         )
-        
-        # Prepare for decode mode - this will allocate out_cache_loc and update fields
-        batch.prepare_for_decode()
-        
         return batch
 
     def update_running_batch_inplace(
@@ -291,6 +290,9 @@ class ParaSReqGatherManager:
         running_batch.has_grammar = any(req.grammar for req in self.global_reqs)
         running_batch.return_hidden_states = any(req.return_hidden_states for req in self.global_reqs)
         running_batch.chunked_req = None
+        
+        for req in running_batch.reqs:
+            req.last_node = running_batch.tree_cache.root_node
         
         # Get the last token from each request (for decode input)
         input_ids_list = []
@@ -319,6 +321,3 @@ class ParaSReqGatherManager:
             running_batch,
             model_config.vocab_size,
         )
-        
-        # Prepare for decode mode - this will allocate out_cache_loc and update fields
-        running_batch.prepare_for_decode()

@@ -78,8 +78,6 @@ class SchedulerParasMixin:
             _,
             _,
         ) = self.tp_worker.get_worker_info()
-
-        self.tree_cache.reset()
         
     def paras_check(self):
         if len(self.waiting_queue) > 0:
@@ -110,8 +108,10 @@ class SchedulerParasMixin:
         self.paras_parallelism_config = "TP"
         self.server_args.enable_dp_attention = False
         self.server_args.enable_torch_a2a_moe = False
+        self.server_args.enable_deepep_moe = False
         global_server_args_dict["enable_dp_attention"] = False
         global_server_args_dict["enable_torch_a2a_moe"] = False
+        global_server_args_dict["enable_deepep_moe"] = False
         
         self.tree_cache.reset()
         local_reqs = self.paras_get_local_reqs()
@@ -165,9 +165,11 @@ class SchedulerParasMixin:
         self.paras_parallelism_config = "EP"
         self.server_args.enable_dp_attention = True
         self.server_args.enable_torch_a2a_moe = True
+        self.server_args.enable_deepep_moe = True
         global_server_args_dict["enable_dp_attention"] = True
         global_server_args_dict["enable_torch_a2a_moe"] = True
-
+        global_server_args_dict["enable_deepep_moe"] = True
+        
         self.tp_worker.paras_configure_ep()
 
         # drop-in replacement for scheduler ep configs
