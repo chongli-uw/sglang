@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Any
 import torch
 import pickle
 import numpy as np
@@ -20,6 +20,21 @@ from sglang.srt.mem_cache.memory_pool import (
 )
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.distributed.parallel_state import GroupCoordinator
+from sglang.srt.paras.utils import print_class_tensor_member, profile_object_members
+
+def prune_request(req: Req):
+    req.last_node = None
+    req.prefix_indices = None
+    req.tokenizer = None
+    
+def recover_request(
+    req: Req, 
+    tree_cache: BasePrefixCache,
+    tokenizer: Any,
+):
+    req.last_node = tree_cache.root_node
+    req.prefix_indices = []
+    req.tokenizer = tokenizer
 
 def paras_tp_group_all_gather_reqs(
     reqs: List[Req],
@@ -29,22 +44,29 @@ def paras_tp_group_all_gather_reqs(
     
     num_ranks = group.world_size
     
+    # Clean up tensor members to avoid pickle triggering torch device copy, mostly radix cache related stuff
+    for req in reqs:
+        prune_request(req)
+        # print_class_tensor_member(req)
+        # profile_object_members(req)
+        
     serialized_data = pickle.dumps(reqs)
     size = len(serialized_data)
     tensor_data = torch.ByteTensor(
-        np.frombuffer(serialized_data, dtype=np.uint8)
+        np.frombuffer(serialized_data, dtype=np.uint8),
+        device="cpu",
     )
     tensor_size = torch.tensor([size], dtype=torch.long, device=device)
     
     gathered_size = torch.empty(num_ranks, dtype=torch.long, device=device)
     group.all_gather_into_tensor(gathered_size, tensor_size)
     gathered_size_list = gathered_size.tolist()
-    max_size = gathered_size.max().item()
+    max_size = max(gathered_size_list)
     if max_size == 0:
         return None, None
     
     padded_tensor_data = torch.empty((max_size,), dtype=torch.uint8, device=device)
-    padded_tensor_data[:tensor_data.size(0)].copy_(tensor_data)
+    padded_tensor_data[:size].copy_(tensor_data)
 
     gathered_data: torch.Tensor = torch.empty((max_size * num_ranks), dtype=torch.uint8, device=device)
     group.all_gather_into_tensor(gathered_data, padded_tensor_data)
@@ -60,7 +82,7 @@ def paras_tp_group_all_gather_reqs(
         gathered_reqs.extend(remote_reqs)
         split_sizes.append(len(remote_reqs))
         
-    print(f"num_gathered_reqs: {len(gathered_reqs)}, split_sizes: {split_sizes}")
+    print(f"metadata sizes: {gathered_size_list}, num_gathered_reqs: {len(gathered_reqs)}, split_sizes: {split_sizes}")
     
     return gathered_reqs, split_sizes
 
@@ -207,12 +229,14 @@ class ParaSReqGatherManager:
                 k_buffer[self.global_token_indices].copy_(permuted_gathered_kvcache[0])
                 v_buffer[self.global_token_indices].copy_(permuted_gathered_kvcache[1])
                 
-        
         for layer_id in range(num_layers):
             gather_one_layer(layer_id)
+            
+        torch.cuda.synchronize()
 
     def get_new_running_batch(
         self,
+        tokenizer: Any,
         tree_cache: BasePrefixCache,
         model_config: ModelConfig,
         enable_overlap: bool,
@@ -225,6 +249,9 @@ class ParaSReqGatherManager:
         """
         # Create a ScheduleBatch using init_new
         # tree_cache should be reset to empty state before calling this function
+        
+        for req in self.global_reqs:
+            recover_request(req, tree_cache, tokenizer)
 
         batch = ScheduleBatch.init_new(
             self.global_reqs,
@@ -237,9 +264,6 @@ class ParaSReqGatherManager:
             enable_custom_logit_processor,
         )
         
-        for req in batch.reqs:
-            req.last_node = batch.tree_cache.root_node
-            
         # Set up decode batch fields
         bs = len(self.global_reqs)
         device = self.req_to_token_pool.device

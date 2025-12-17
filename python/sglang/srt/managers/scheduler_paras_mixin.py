@@ -130,7 +130,7 @@ class SchedulerParasMixin:
         self.tree_cache.reset()
         local_reqs = self.paras_get_local_reqs()
         
-        # self.paras_start_profile("paras_configure_tp")
+        self.paras_start_profile("paras_configure_tp")
         
         paras_gather_manager = ParaSReqGatherManager(
             local_reqs,
@@ -151,6 +151,7 @@ class SchedulerParasMixin:
             paras_gather_manager.gather_cache()
         
         self.running_batch = paras_gather_manager.get_new_running_batch(
+            self.tokenizer,
             self.tree_cache,
             self.model_config,
             self.enable_overlap,
@@ -165,7 +166,7 @@ class SchedulerParasMixin:
         end_time = time.time()
         cost_ms = (end_time - start_time) * 1000
         logger.info(f"Time taken to configure TP: {cost_ms} ms")
-        # self.paras_stop_profile()
+        self.paras_stop_profile()
 
         # drop-in replacement for scheduler tp configs 
         self.tp_size = self.paras_tp_size
