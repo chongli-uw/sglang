@@ -170,8 +170,7 @@ class ParaSReqGatherManager:
         self.token_to_kv_pool_allocator.paras_resize_and_clear(new_cache_size)
 
         if self.num_global_tokens > 0:        
-            new_token_indices = []
-            global_token_indices = self.token_to_kv_pool_allocator.alloc(self.num_global_tokens)
+            global_token_indices: torch.Tensor = self.token_to_kv_pool_allocator.alloc(self.num_global_tokens)
             start_index = 0
             # TODO: optimize writing to req_to_token_pool and token_to_kv_pool_allocator
             for req, req_pool_idx in zip(self.global_reqs, req_pool_indices):
@@ -179,7 +178,6 @@ class ParaSReqGatherManager:
                 req.req_pool_idx = req_pool_idx
                 token_indices = global_token_indices[start_index:end_index]
                 self.req_to_token_pool.write((req_pool_idx, slice(0, req.seqlen - 1)), token_indices)
-                new_token_indices.extend(token_indices)
                 start_index = end_index
                 
             self.global_token_indices = global_token_indices
