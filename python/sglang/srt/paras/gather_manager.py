@@ -10,7 +10,6 @@ from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache
 from sglang.srt.managers.schedule_batch import (
     Req, 
     ScheduleBatch, 
-    global_server_args_dict,
 )
 from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 from sglang.srt.mem_cache.memory_pool import (

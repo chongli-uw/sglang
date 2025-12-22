@@ -30,6 +30,8 @@ import zmq
 from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
 from sglang.srt.managers.io_struct import (
     BlockReqInput,
+    ParaSConfigureReqType,
+    ParaSConfigureReqInput,
     TokenizedEmbeddingReqInput,
     TokenizedGenerateReqInput,
     WatchLoadUpdateReq,
@@ -57,6 +59,7 @@ from sglang.srt.utils import (
     maybe_reindex_device_id,
 )
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
+from sglang.srt.paras.utils import paras_func
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 
 logger = logging.getLogger(__name__)
@@ -165,6 +168,7 @@ class DataParallelController:
         self.max_req_input_len = None
 
         self.init_dispatcher()
+        self.paras_worker_init()
 
     def send_to_all_workers(self, obj):
         for worker in self.workers:
@@ -199,6 +203,25 @@ class DataParallelController:
             ]
         )
         self._request_dispatcher.add_fallback_fn(self.send_control_message)
+
+    def paras_worker_init(self):
+        self.paras_ep_workers = self.workers
+        self.paras_tp_workers = self.workers[:: self.server_args.paras_tp_size]
+        self.paras_ep_ctrl_msg_step = self.control_message_step
+        self.paras_tp_ctrl_msg_step = 1
+
+    def paras_configure_helper(self):
+        self.round_robin_counter = self.round_robin_counter % len(self.workers)
+
+    @paras_func
+    def paras_tp_configure(self):
+        self.workers = self.paras_tp_workers
+        self.control_message_step = self.paras_tp_ctrl_msg_step
+
+    @paras_func
+    def paras_ep_configure(self):
+        self.workers = self.paras_ep_workers
+        self.control_message_step = self.paras_ep_ctrl_msg_step
 
     def launch_dp_schedulers(self, server_args, port_args):
         base_gpu_id = 0
@@ -498,6 +521,14 @@ class DataParallelController:
                 except zmq.ZMQError:
                     break
                 self._request_dispatcher(recv_req)
+
+                if isinstance(recv_req, ParaSConfigureReqInput):
+                    if recv_req.type == ParaSConfigureReqType.CONFIGURE_TP:
+                        self.paras_tp_configure()
+                    elif recv_req.type == ParaSConfigureReqType.CONFIGURE_EP:
+                        self.paras_ep_configure()
+                    else:
+                        raise ValueError(f"Unknown ParaSConfigureReqType: {recv_req.type}")
 
 
 def run_data_parallel_controller_process(

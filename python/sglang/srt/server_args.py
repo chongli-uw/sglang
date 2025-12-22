@@ -413,6 +413,8 @@ class ServerArgs:
     moe_dense_tp_size: Optional[int] = None
     elastic_ep_backend: Literal[None, "mooncake"] = None
     mooncake_ib_device: Optional[str] = None
+    enable_paras_moe: bool = False
+    paras_tp_size: int = 4
 
     # Mamba cache
     max_mamba_cache_size: Optional[int] = None
@@ -609,6 +611,7 @@ class ServerArgs:
         self._handle_a2a_moe()
         self._handle_eplb_and_dispatch()
         self._handle_expert_distribution_metrics()
+        self._check_paras_config()
 
         # Handle pipeline parallelism.
         self._handle_pipeline_parallelism()
@@ -1474,6 +1477,13 @@ class ServerArgs:
                 self.expert_distribution_recorder_buffer_size = x
             elif self.expert_distribution_recorder_mode is not None:
                 self.expert_distribution_recorder_buffer_size = 1000
+    
+    def _check_paras_config(self):
+        if self.enable_paras_moe:
+            assert self.enable_dp_lm_head, "enable_dp_lm_head must be set when enable_paras_moe is set"
+            assert self.enable_dp_attention, "enable_dp_attention must be set when enable_paras_moe is set"
+            assert self.paras_tp_size <= 8 and self.paras_tp_size > 0, "paras_tp_size must be positive when enable_paras_moe is set"
+            assert self.tp_size == self.dp_size, "paras moe requires tp_size == dp_size, which means attn tp size is 1"
 
     def _handle_pipeline_parallelism(self):
         if self.pp_size > 1:
@@ -2935,6 +2945,17 @@ class ServerArgs:
             type=int,
             default=ServerArgs.moe_dense_tp_size,
             help="TP size for MoE dense MLP layers. This flag is useful when, with large TP size, there are errors caused by weights in MLP layers having dimension smaller than the min dimension GEMM supports.",
+        )
+        parser.add_argument(
+            "--enable-paras-moe",
+            action="store_true",
+            help="Enabling ParaS MoE implementation for EP MoE.",
+        )
+        parser.add_argument(
+            "--paras-tp-size",
+            type=int,
+            default=ServerArgs.paras_tp_size,
+            help="TP size for ParaS MoE layers.",
         )
         parser.add_argument(
             "--elastic-ep-backend",

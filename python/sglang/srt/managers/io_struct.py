@@ -1552,6 +1552,19 @@ class LazyDumpTensorsReqOutput(BaseReq):
     success: bool
 
 
+class ParaSConfigureReqType(Enum):
+    CONFIGURE_TP = 1
+    CONFIGURE_EP = 2
+
+@dataclass
+class ParaSConfigureReqInput(BaseReq):
+    type: ParaSConfigureReqType
+
+@dataclass
+class ParaSConfigureReqOutput(BaseReq):
+    pass
+
+
 def _check_all_req_types():
     """A helper function to check all request types are defined in this file."""
     import inspect

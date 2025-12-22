@@ -5,15 +5,15 @@ import logging
 import torch
 import time
 
-from sglang.srt.managers.io_struct import ParaSConfigureReq, ParaSConfigureReqOutput
+from sglang.srt.managers.io_struct import ParaSConfigureReqInput, ParaSConfigureReqType, ParaSConfigureReqOutput
 from sglang.srt.managers.schedule_batch import (
     Req,
     ScheduleBatch,
-    global_server_args_dict,
 )
 from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
 from sglang.srt.managers.tp_worker import TpModelWorker
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool, MHATokenToKVPool, TokenToKVPoolAllocator
+from sglang.srt.server_args import get_global_server_args
 
 from sglang.srt.paras.utils import paras_func, paras_profile_func
 from sglang.srt.paras.gather_manager import ParaSReqGatherManager
@@ -121,11 +121,9 @@ class SchedulerParasMixin:
         # switch from EP to DP x TP
         self.paras_parallelism_config = "TP"
         self.server_args.enable_dp_attention = False
-        self.server_args.enable_torch_a2a_moe = False
         self.server_args.enable_deepep_moe = False
-        global_server_args_dict["enable_dp_attention"] = False
-        global_server_args_dict["enable_torch_a2a_moe"] = False
-        global_server_args_dict["enable_deepep_moe"] = False
+        get_global_server_args().enable_dp_attention = False
+        get_global_server_args().enable_deepep_moe = False
         
         self.tree_cache.reset()
         local_reqs = self.paras_get_local_reqs()
@@ -196,11 +194,9 @@ class SchedulerParasMixin:
         # switch from TP to EP
         self.paras_parallelism_config = "EP"
         self.server_args.enable_dp_attention = True
-        self.server_args.enable_torch_a2a_moe = True
         self.server_args.enable_deepep_moe = True
-        global_server_args_dict["enable_dp_attention"] = True
-        global_server_args_dict["enable_torch_a2a_moe"] = True
-        global_server_args_dict["enable_deepep_moe"] = True
+        get_global_server_args().enable_dp_attention = True
+        get_global_server_args().enable_deepep_moe = True
         
         self.tp_worker.paras_configure_ep()
 
@@ -226,13 +222,13 @@ class SchedulerParasMixin:
         self.send_to_detokenizer = self.ep_send_to_detokenizer
         self.recv_from_rpc = self.ep_recv_from_rpc
 
-    def paras_configure_handle(self, recv_req: ParaSConfigureReq):
-        if recv_req == ParaSConfigureReq.CONFIGURE_TP:
+    def paras_configure_handle(self, recv_req: ParaSConfigureReqInput):
+        if recv_req.type == ParaSConfigureReqType.CONFIGURE_TP:
             self.paras_configure_tp()
-        elif recv_req == ParaSConfigureReq.CONFIGURE_EP:
+        elif recv_req.type == ParaSConfigureReqType.CONFIGURE_EP:
             self.paras_configure_ep()
         else:
-            raise ValueError("Unrecognized ParaSConfigureReq value")
+            raise ValueError(f"Unrecognized ParaSConfigureReqType: {recv_req.type}")
         return ParaSConfigureReqOutput()
     
     def paras_start_profile(self, op_name: str = "paras_configure"):

@@ -49,6 +49,7 @@ from sglang.srt.utils.hf_transformers_utils import (
     get_tokenizer_from_processor,
 )
 from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+from sglang.srt.paras.utils import paras_func
 
 if TYPE_CHECKING:
     from sglang.srt.managers.cache_controller import LayerDoneCounter
@@ -452,3 +453,25 @@ class TpModelWorker(BaseTpWorker):
         )
         batch_result.next_token_ids = next_token_ids
         return batch_result
+    
+    def paras_configure_helper(self):
+        # helper function to configure worker info
+        self.max_total_num_tokens = self.model_runner.max_total_num_tokens
+        self.max_running_requests = self.model_runner.req_to_token_pool.size
+        assert self.max_running_requests > 0, "max_running_request is zero"
+        self.max_req_len = min(
+            self.model_config.context_len - 1,
+            self.max_total_num_tokens - 1,
+        )
+        self.max_req_input_len = self.max_req_len - 5
+        assert (
+            self.max_req_len > 0 and self.max_req_input_len > 0
+        ), "Memory pool size is too small"
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        self.model_runner.paras_configure_tp(paras_tp_size, paras_tp_rank)
+        
+    @paras_func
+    def paras_configure_ep(self):
+        self.model_runner.paras_configure_ep()

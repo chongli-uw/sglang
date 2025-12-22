@@ -93,6 +93,9 @@ from sglang.srt.managers.io_struct import (
     LoadLoRAAdapterReqOutput,
     OpenSessionReqInput,
     OpenSessionReqOutput,
+    ParaSConfigureReqType,
+    ParaSConfigureReqInput,
+    ParaSConfigureReqOutput,
     ProfileReq,
     ReleaseMemoryOccupationReqInput,
     ResumeMemoryOccupationReqInput,
@@ -145,6 +148,7 @@ from sglang.srt.managers.scheduler_runtime_checker_mixin import (
 from sglang.srt.managers.scheduler_update_weights_mixin import (
     SchedulerUpdateWeightsMixin,
 )
+from sglang.srt.paras.scheduler_paras_mixin import SchedulerParasMixin
 from sglang.srt.managers.session_controller import Session
 from sglang.srt.managers.utils import GenerationBatchResult, validate_input_length
 from sglang.srt.mem_cache.chunk_cache import ChunkCache, SWAChunkCache
@@ -218,6 +222,7 @@ class Scheduler(
     SchedulerMultiplexMixin,
     SchedulerRuntimeCheckerMixin,
     SchedulerPPMixin,
+    SchedulerParasMixin,
 ):
     """A scheduler that manages a tensor parallel GPU worker."""
 
@@ -507,6 +512,9 @@ class Scheduler(
 
         # Init disaggregation
         self.init_disaggregation()
+        
+        # Init ParaS configuration
+        self.init_paras_config()
 
         # Init metrics stats
         self.init_metrics(tp_rank, pp_rank, dp_rank)
@@ -562,6 +570,7 @@ class Scheduler(
                 (SetInternalStateReq, self.set_internal_state),
                 (RpcReqInput, self.handle_rpc_request),
                 (ExpertDistributionReq, self.expert_distribution_handle),
+                (ParaSConfigureReqInput, self.paras_configure_handle),
                 (LoadLoRAAdapterReqInput, self.load_lora_adapter),
                 (UnloadLoRAAdapterReqInput, self.unload_lora_adapter),
                 (GetLoadReqInput, self.get_load),

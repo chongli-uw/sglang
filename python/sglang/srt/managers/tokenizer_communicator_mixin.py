@@ -46,6 +46,9 @@ from sglang.srt.managers.io_struct import (
     LoadLoRAAdapterReqOutput,
     LoRAUpdateOutput,
     OpenSessionReqInput,
+    ParaSConfigureReqType,
+    ParaSConfigureReqInput,
+    ParaSConfigureReqOutput,
     ProfileReq,
     ProfileReqOutput,
     ProfileReqType,
@@ -204,12 +207,36 @@ class TokenizerCommunicatorMixin:
         self.expert_distribution_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
+        self.paras_configure_communicator = _Communicator(
+            self.send_to_scheduler, server_args.dp_size
+        )
         self.update_lora_adapter_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
         self.get_load_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size, mode="watching"
         )
+
+        self.communicators = [
+            self.init_weights_update_group_communicator,
+            self.destroy_weights_update_group_communicator,
+            self.update_weights_from_distributed_communicator,
+            self.init_weights_send_group_for_remote_instance_communicator,
+            self.send_weights_to_remote_instance_communicator,
+            self.update_weights_from_tensor_communicator,
+            self.update_weights_from_ipc_communicator,
+            self.get_weights_by_name_communicator,
+            self.release_memory_occupation_communicator,
+            self.resume_memory_occupation_communicator,
+            self.slow_down_communicator,
+            self.flush_cache_communicator,
+            self.clear_hicache_storage_communicator,
+            self.profile_communicator,
+            self.get_internal_state_communicator,
+            self.set_internal_state_communicator,
+            self.expert_distribution_communicator,
+            self.paras_configure_communicator,
+        ]
 
         self._result_dispatcher += self._get_communicator_dispatcher()
 
@@ -283,6 +310,10 @@ class TokenizerCommunicatorMixin:
                 (
                     ExpertDistributionReqOutput,
                     self.expert_distribution_communicator.handle_recv,
+                ),
+                (
+                    ParaSConfigureReqOutput,
+                    self.paras_configure_communicator.handle_recv,
                 ),
                 (
                     LoRAUpdateOutput,
@@ -362,6 +393,21 @@ class TokenizerCommunicatorMixin:
         self.auto_create_handle_loop()
         req = ExpertDistributionReq(action=ExpertDistributionReqType.DUMP_RECORD)
         await self.expert_distribution_communicator(req)
+    
+    async def paras_configure_tp(self: TokenizerManager):
+        self.auto_create_handle_loop()
+        paras_dp_size = self.server_args.tp_size // self.server_args.paras_tp_size
+        for comm in self.communicators:
+            comm._fan_out = paras_dp_size
+        req = ParaSConfigureReqInput(type=ParaSConfigureReqType.CONFIGURE_TP)
+        await self.paras_configure_communicator(req)
+
+    async def paras_configure_ep(self: TokenizerManager):
+        self.auto_create_handle_loop()
+        for comm in self.communicators:
+            comm._fan_out = self.server_args.dp_size
+        req = ParaSConfigureReqInput(type=ParaSConfigureReqType.CONFIGURE_EP)
+        await self.paras_configure_communicator(req)
 
     async def init_weights_update_group(
         self: TokenizerManager,
