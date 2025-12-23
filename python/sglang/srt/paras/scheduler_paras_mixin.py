@@ -17,6 +17,9 @@ from sglang.srt.server_args import get_global_server_args
 
 from sglang.srt.paras.utils import paras_func, paras_profile_func
 from sglang.srt.paras.gather_manager import ParaSReqGatherManager
+from sglang.srt.layers.moe import utils as moe_utils
+from sglang.srt.layers.moe.utils import MoeA2ABackend
+
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +124,9 @@ class SchedulerParasMixin:
         # switch from EP to DP x TP
         self.paras_parallelism_config = "TP"
         self.server_args.enable_dp_attention = False
-        self.server_args.enable_deepep_moe = False
+        self.server_args.moe_a2a_backend = MoeA2ABackend.NONE
         get_global_server_args().enable_dp_attention = False
-        get_global_server_args().enable_deepep_moe = False
+        moe_utils.MOE_A2A_BACKEND = MoeA2ABackend.NONE
         
         self.tree_cache.reset()
         local_reqs = self.paras_get_local_reqs()
@@ -194,9 +197,9 @@ class SchedulerParasMixin:
         # switch from TP to EP
         self.paras_parallelism_config = "EP"
         self.server_args.enable_dp_attention = True
-        self.server_args.enable_deepep_moe = True
+        self.server_args.moe_a2a_backend = MoeA2ABackend.DEEPEP
         get_global_server_args().enable_dp_attention = True
-        get_global_server_args().enable_deepep_moe = True
+        moe_utils.MOE_A2A_BACKEND = MoeA2ABackend.DEEPEP
         
         self.tp_worker.paras_configure_ep()
 

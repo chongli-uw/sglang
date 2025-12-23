@@ -73,9 +73,9 @@ _is_cpu = is_cpu()
 logger = logging.getLogger(__name__)
 
 
-def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig) -> BaseDispatcher:
+def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig, force_standard_dispatcher: bool = False) -> BaseDispatcher:
     a2a_backend = get_moe_a2a_backend()
-    if a2a_backend.is_none():
+    if a2a_backend.is_none() or force_standard_dispatcher:
         return StandardDispatcher(moe_runner_config)
     elif a2a_backend.is_deepep() or a2a_backend.is_mooncake():
         return MaybeTboDeepEPDispatcher(
@@ -145,6 +145,11 @@ class FusedMoE(torch.nn.Module):
         use_weight_loader_fused: bool = False,
         with_bias=False,
         skip_weights_init: bool = False,
+        moe_ep_size_override: Optional[int] = None,
+        moe_tp_size_override: Optional[int] = None,
+        moe_ep_rank_override: Optional[int] = None,
+        moe_tp_rank_override: Optional[int] = None,
+        force_standard_dispatcher: bool = False,
     ):
         super().__init__()
         if params_dtype is None:
@@ -163,10 +168,10 @@ class FusedMoE(torch.nn.Module):
             enable_flashinfer_cutlass_moe = False
 
         self.enable_flashinfer_cutlass_moe = enable_flashinfer_cutlass_moe
-        self.moe_ep_size = get_moe_expert_parallel_world_size()
-        self.moe_ep_rank = get_moe_expert_parallel_rank()
-        self.moe_tp_size = get_moe_tensor_parallel_world_size()
-        self.moe_tp_rank = get_moe_tensor_parallel_rank()
+        self.moe_ep_size = moe_ep_size_override if moe_ep_size_override is not None else get_moe_expert_parallel_world_size()
+        self.moe_ep_rank = moe_ep_rank_override if moe_ep_rank_override is not None else get_moe_expert_parallel_rank()
+        self.moe_tp_size = moe_tp_size_override if moe_tp_size_override is not None else get_moe_tensor_parallel_world_size()
+        self.moe_tp_rank = moe_tp_rank_override if moe_tp_rank_override is not None else get_moe_tensor_parallel_rank()
         assert num_experts % self.moe_ep_size == 0
         self.num_local_experts = num_experts // self.moe_ep_size
 
@@ -231,7 +236,7 @@ class FusedMoE(torch.nn.Module):
         )
 
         self.quant_method.create_moe_runner(self, self.moe_runner_config)
-        self.dispatcher = create_moe_dispatcher(self.moe_runner_config)
+        self.dispatcher = create_moe_dispatcher(self.moe_runner_config, force_standard_dispatcher)
 
         self.should_fuse_routed_scaling_factor_in_topk = isinstance(
             self.quant_method, ModelOptNvFp4FusedMoEMethod
