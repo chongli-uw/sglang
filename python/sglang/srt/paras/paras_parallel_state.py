@@ -9,12 +9,13 @@ from sglang.srt.distributed.parallel_state import (
     GroupCoordinator,
 )
 import sglang.srt.distributed.parallel_state as parallel_state
-
 import sglang.srt.layers.dp_attention as dp_attention
 
 _PARAS_EP: Optional[GroupCoordinator] = None
 
 _PARAS_TP: Optional[GroupCoordinator] = None
+
+_PARAS_SELF: Optional[GroupCoordinator] = None
 
 def get_paras_tp_group() -> GroupCoordinator:
     assert _PARAS_TP is not None, "ParaS tensor parallel group is not initialized"
@@ -38,6 +39,7 @@ _PARAS_DP_SIZE: int = None
 _PARAS_DP_RANK: int = None
 _PARAS_EP_SIZE: int = None
 _PARAS_EP_RANK: int = None
+
 
 def initialize_paras_parallel(
     dp_size: int = 1,
@@ -65,8 +67,11 @@ def initialize_paras_parallel(
         )
 
     # get paras parallel size and rank
-    global _PARAS_EP
-    _PARAS_EP = parallel_state._TP
+    # Since paras is launched with EP mode, _MOE_TP is set to self rank
+    global _PARAS_EP, _PARAS_TP, _PARAS_SELF
+    _PARAS_EP = parallel_state._MOE_EP
+    _PARAS_SELF = parallel_state._MOE_TP
+    assert _PARAS_SELF.world_size == 1, f"ParaS self group world size is not 1, got {_PARAS_SELF.world_size}"
 
     global _PARAS_TP_SIZE, _PARAS_DP_SIZE, _PARAS_EP_SIZE, _PARAS_TP_RANK, _PARAS_DP_RANK, _PARAS_EP_RANK
     _PARAS_TP_SIZE = tp_size
@@ -79,7 +84,7 @@ def initialize_paras_parallel(
 
     # Build the ParaS tensor model-parallel groups.
     num_paras_tensor_model_parallel_groups: int = world_size // tp_size
-    global _PARAS_TP
+    
     assert _PARAS_TP is None, "ParaS tensor parallel group is already initialized"
     group_ranks = []
     for i in range(num_paras_tensor_model_parallel_groups):
@@ -140,6 +145,8 @@ def get_paras_dp_rank() -> int:
 def paras_comm_configure_tp():
     # global _TP
     parallel_state._TP = _PARAS_TP
+    parallel_state._MOE_EP = _PARAS_SELF
+    parallel_state._MOE_TP = _PARAS_TP
 
     # global _ATTN_TP_RANK, _ATTN_TP_SIZE, _ATTN_DP_RANK, _ATTN_DP_SIZE
     dp_attention._ATTN_TP_RANK = _PARAS_TP_RANK
@@ -155,6 +162,8 @@ def paras_comm_configure_ep():
     # TODO(shaoyuw): adapt for moe dense tp
     # global _TP
     parallel_state._TP = _PARAS_EP
+    parallel_state._MOE_EP = _PARAS_EP
+    parallel_state._MOE_TP = _PARAS_SELF
 
     # global _ATTN_TP_RANK, _ATTN_TP_SIZE, _ATTN_DP_RANK, _ATTN_DP_SIZE
     dp_attention._ATTN_TP_RANK = 0
