@@ -59,6 +59,14 @@ from sglang.srt.distributed import (
     set_torch_symm_mem_all_reduce,
 )
 from sglang.srt.distributed.parallel_state import monkey_patch_vllm_parallel_state
+from sglang.srt.paras.paras_parallel_state import (
+    initialize_paras_parallel,
+    get_paras_dp_group,
+    get_paras_tp_group,
+    paras_comm_configure_tp,
+    paras_comm_configure_ep,
+)
+from sglang.srt.paras.utils import paras_func, paras_memory_check
 from sglang.srt.elastic_ep.elastic_ep import ElasticEPStateManager
 from sglang.srt.eplb.eplb_manager import EPLBManager
 from sglang.srt.eplb.expert_distribution import (
@@ -650,6 +658,14 @@ class ModelRunner:
                 model_config=self.model_config,
             )
 
+            # Initialize ParaS parallel groups if enabled
+            if self.server_args.enable_paras_moe:
+                initialize_paras_parallel(
+                    dp_size=self.tp_size // self.server_args.paras_tp_size,
+                    tp_size=self.server_args.paras_tp_size,
+                    global_rank=self.tp_rank,
+                )
+
         min_per_gpu_memory = get_available_gpu_memory(
             self.device,
             self.gpu_id,
@@ -659,6 +675,14 @@ class ModelRunner:
         self.tp_group = get_tp_group()
         self.pp_group = get_pp_group()
         self.attention_tp_group = get_attention_tp_group()
+
+        # Initialize ParaS parallel groups
+        if self.server_args.enable_paras_moe:
+            self.paras_dp_group = get_paras_dp_group()
+            self.paras_tp_group = get_paras_tp_group()
+        else:
+            self.paras_dp_group = None
+            self.paras_tp_group = None
 
         # Check memory for tensor parallelism
         local_gpu_memory = get_available_gpu_memory(self.device, self.gpu_id)
@@ -2341,6 +2365,44 @@ class ModelRunner:
         except Exception as e:
             logger.error(f"IPC weight update failed: {e}")
             return False, str(e)
+
+    def paras_configure_helper(self):
+        """Helper function for ParaS configuration."""
+        # Reconfigure token_to_kv_pool_allocator, cache related stuffs are configured in scheduler (paras gather manager)
+        self.max_total_num_tokens = self.token_to_kv_pool_allocator.size
+        self.max_running_requests = self.req_to_token_pool.size
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        """Configure the ModelRunner for ParaS tensor parallelism."""
+        assert not self.use_mla_backend, (
+            "ParaS does not support MLA backend yet."
+        )
+        if paras_tp_rank == 0:
+            paras_memory_check("before paras_configure_tp")
+
+        paras_comm_configure_tp()
+
+        # Import here to avoid circular imports
+        from sglang.srt.models.qwen3_moe import Qwen3MoeForCausalLM
+
+        assert isinstance(self.model, Qwen3MoeForCausalLM), (
+            "ParaS only supports Qwen3MoeForCausalLM model for now."
+        )
+        self.model.paras_configure_tp(paras_tp_size, paras_tp_rank)
+
+        if paras_tp_rank == 0:
+            paras_memory_check("after paras_configure_tp")
+
+    @paras_func
+    def paras_configure_ep(self):
+        """Configure the ModelRunner for ParaS expert parallelism."""
+        assert not self.use_mla_backend, (
+            "ParaS does not support MLA backend yet."
+        )
+        assert isinstance(self.token_to_kv_pool, MHATokenToKVPool)
+        self.token_to_kv_pool.paras_configure_ep()
+        paras_comm_configure_ep()
 
 
 def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):

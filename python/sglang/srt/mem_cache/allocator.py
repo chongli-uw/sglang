@@ -171,6 +171,18 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
     def load_cpu_copy(self, kv_cache_cpu, indices):
         return self._kvcache.load_cpu_copy(kv_cache_cpu, indices)
 
+    def paras_resize_and_clear(self, new_size: int):
+        """
+        Resize and clear the pool for ParaS.
+        """
+        self.size = new_size
+        self.free_pages = torch.arange(
+            1, new_size + 1, dtype=torch.int64, device=self.device
+        )
+        self.is_not_in_free_group = True
+        self.free_group = []
+        self.release_pages = torch.empty((0,), dtype=torch.int64, device=self.device)
+
 
 class SWATokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
     """Allocator for SWA hybrid KV cache."""

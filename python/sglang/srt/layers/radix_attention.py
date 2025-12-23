@@ -21,6 +21,7 @@ import torch
 from torch import nn
 
 from sglang.srt.compilation.piecewise_context_manager import get_forward_context
+from sglang.srt.paras.utils import paras_func
 from sglang.srt.utils import direct_register_custom_op
 
 if TYPE_CHECKING:
@@ -90,6 +91,31 @@ class RadixAttention(nn.Module):
         self.pos_encoding_mode = pos_encoding_mode
         self.logit_capping_method = logit_capping_method
         self.xai_temperature_len = -1
+
+    def paras_configure_helper(self):
+        pass
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        """
+        Configure the attention layer for tensor parallelism.
+        """
+        self.ep_q_head_num = self.tp_q_head_num
+        self.ep_k_head_num = self.tp_k_head_num
+        self.ep_v_head_num = self.tp_v_head_num
+
+        self.tp_q_head_num = self.tp_q_head_num // paras_tp_size
+        self.tp_k_head_num = self.tp_k_head_num // paras_tp_size
+        self.tp_v_head_num = self.tp_v_head_num // paras_tp_size
+
+    @paras_func
+    def paras_configure_ep(self):
+        """
+        Configure the attention layer for expert parallelism.
+        """
+        self.tp_q_head_num = self.ep_q_head_num
+        self.tp_k_head_num = self.ep_k_head_num
+        self.tp_v_head_num = self.ep_v_head_num
 
     def forward(
         self,

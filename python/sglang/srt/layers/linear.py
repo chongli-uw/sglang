@@ -33,6 +33,7 @@ from sglang.srt.layers.parameter import (
 )
 from sglang.srt.layers.quantization.unquant import UnquantizedLinearMethod
 from sglang.srt.layers.utils import pad_or_narrow_weight
+from sglang.srt.paras.utils import paras_func
 from sglang.srt.utils import get_bool_env_var, is_cpu, is_hip, is_npu, set_weight_attrs
 
 if TYPE_CHECKING:
@@ -1192,6 +1193,65 @@ class QKVParallelLinear(ColumnParallelLinear):
         assert param_data.shape == loaded_weight.shape
         param_data.copy_(loaded_weight)
 
+    def paras_configure_helper(self):
+        self.num_heads = divide(self.total_num_heads, self.tp_size)
+        self.num_kv_heads = divide(self.total_num_kv_heads, self.tp_size)
+        self.num_kv_head_replicas = 1
+        self.q_proj_shard_size = self.num_heads * self.head_size
+        self.kv_proj_shard_size = self.num_kv_heads * self.head_size
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        """
+        Shard the weights for tensor parallelism.
+        """
+        assert paras_tp_size <= self.num_kv_heads
+        tp_num_heads = self.total_num_heads // paras_tp_size
+        tp_num_kv_heads = self.total_num_kv_heads // paras_tp_size
+
+        tp_head_start = paras_tp_rank * tp_num_heads
+        tp_head_end = paras_tp_rank * tp_num_heads + tp_num_heads
+        tp_k_head_start = self.total_num_heads + paras_tp_rank * tp_num_kv_heads
+        tp_k_head_end = tp_k_head_start + tp_num_kv_heads
+        tp_v_head_start = (
+            self.total_num_heads + self.total_num_kv_heads
+            + paras_tp_rank * tp_num_kv_heads
+        )
+        tp_v_head_end = tp_v_head_start + tp_num_kv_heads
+
+        # TODO(shaoyuw): Can we drop full weight?
+        self.full_weight = self.weight
+
+        # column major
+        full_weight_tensor = self.full_weight.data
+        new_weight_tensor = torch.row_stack((
+            full_weight_tensor[tp_head_start*self.head_size:tp_head_end*self.head_size, :],
+            full_weight_tensor[tp_k_head_start*self.head_size:tp_k_head_end*self.head_size, :],
+            full_weight_tensor[tp_v_head_start*self.head_size:tp_v_head_end*self.head_size, :]
+        ))
+        self.weight = torch.nn.Parameter(new_weight_tensor, requires_grad=False)
+        set_weight_attrs(self.weight, {"input_dim": 1, "output_dim": 0})
+
+        if self.bias is not None:
+            self.full_bias = self.bias
+            full_bias_tensor = self.full_bias.data
+            new_bias_tensor = torch.cat([
+                full_bias_tensor[tp_head_start:tp_head_end],
+                full_bias_tensor[tp_k_head_start:tp_k_head_end],
+                full_bias_tensor[tp_v_head_start:tp_v_head_end]
+            ])
+            self.bias = torch.nn.Parameter(new_bias_tensor, requires_grad=False)
+
+        self.tp_size = paras_tp_size
+        self.tp_rank = paras_tp_rank
+
+    @paras_func
+    def paras_configure_ep(self):
+        self.tp_size = 1
+        self.tp_rank = 0
+        self.weight = self.full_weight
+        self.bias = self.full_bias if self.bias is not None else None
+
 
 class RowParallelLinear(LinearBase):
     """Linear layer with row parallelism.
@@ -1395,3 +1455,31 @@ class RowParallelLinear(LinearBase):
         s += f", tp_size={self.tp_size}"
         s += f", reduce_results={self.reduce_results}"
         return s
+
+    def paras_configure_helper(self):
+        self.input_size_per_partition = divide(self.input_size, self.tp_size)
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        input_size_per_partition = divide(self.input_size, paras_tp_size)
+        row_start = paras_tp_rank * input_size_per_partition
+        row_end = (paras_tp_rank + 1) * input_size_per_partition
+
+        self.full_weight = self.weight
+        full_weight_tensor = self.full_weight.data
+        new_weight_tensor = full_weight_tensor[:, row_start:row_end]
+        self.weight = torch.nn.Parameter(new_weight_tensor, requires_grad=False)
+        set_weight_attrs(self.weight, {"input_dim": 1, "output_dim": 0})
+
+        if self.bias is not None:
+            self.full_bias = self.bias
+
+        self.tp_size = paras_tp_size
+        self.tp_rank = paras_tp_rank
+
+    @paras_func
+    def paras_configure_ep(self):
+        self.tp_size = 1
+        self.tp_rank = 0
+        self.weight = self.full_weight
+        self.bias = self.full_bias if hasattr(self, 'full_bias') and self.full_bias is not None else self.bias

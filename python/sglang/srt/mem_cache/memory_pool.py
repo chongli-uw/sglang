@@ -48,6 +48,7 @@ from sglang.srt.mem_cache.utils import (
     set_mla_kv_buffer_triton,
     set_mla_kv_scale_buffer_triton,
 )
+from sglang.srt.paras.utils import paras_func
 from sglang.srt.utils import (
     get_bool_env_var,
     is_cuda,
@@ -124,6 +125,16 @@ class ReqToTokenPool:
 
     def clear(self):
         self.free_slots = list(range(self.size))
+
+    def paras_resize_and_clear(self, new_size: int):
+        """
+        Resize and clear the pool for ParaS.
+        """
+        self.size = new_size
+        self.req_to_token = torch.zeros(
+            (new_size, self.max_context_len), dtype=torch.int32, device=self.device
+        )
+        self.free_slots = list(range(new_size))
 
 
 class MambaPool:
@@ -852,6 +863,68 @@ class MHATokenToKVPool(KVCache):
             num_warps=cfg["num_warps"],
             num_stages=2,
         )
+
+    def paras_configure_helper(self):
+        # TODO(shaoyuw): check for ParaS, the data ptrs now remains the same
+        self.data_ptrs = torch.tensor(
+            [x.data_ptr() for x in self.k_buffer + self.v_buffer],
+            dtype=torch.uint64,
+            device=self.device,
+        )
+        self.data_strides = torch.tensor(
+            [
+                np.prod(x.shape[1:]) * x.dtype.itemsize
+                for x in self.k_buffer + self.v_buffer
+            ],
+            device=self.device,
+        )
+        self.size = self.k_buffer[0].shape[0] - self.page_size
+
+    def paras_resize_cache(self, layer_id: int, new_size: int, new_head_num: int):
+        self.k_buffer[layer_id - self.start_layer] = torch.empty(
+            new_size + self.page_size,
+            new_head_num,
+            self.head_dim,
+            dtype=self.store_dtype,
+            device=self.device,
+        )
+        self.v_buffer[layer_id - self.start_layer] = torch.empty(
+            new_size + self.page_size,
+            new_head_num,
+            self.head_dim,
+            dtype=self.store_dtype,
+            device=self.device,
+        )
+
+    @paras_func
+    def paras_configure_tp(self, paras_tp_size: int, paras_tp_rank: int):
+        # ParaS: Reshape kv cache from EP to TP.
+        # TODO: change the size of kv cache pool
+        # It does not intrusively change the number of heads, just increases the number of slots by reshaping kv cache.
+        sharded_head_num = self.head_num // paras_tp_size
+        for i in range(self.layer_num):
+            self.k_buffer[i] = self.k_buffer[i].view(
+                (-1, sharded_head_num, self.head_dim)
+            )
+            self.v_buffer[i] = self.v_buffer[i].view(
+                (-1, sharded_head_num, self.head_dim)
+            )
+        self.head_num = sharded_head_num
+
+    @paras_func
+    def paras_configure_ep(self):
+        # ParaS: Reshape kv cache from TP to EP.
+        for i in range(self.layer_num):
+            self.k_buffer[i] = self.k_buffer[i].view(
+                (-1, self.head_num, self.head_dim)
+            )
+            self.v_buffer[i] = self.v_buffer[i].view(
+                (-1, self.head_num, self.head_dim)
+            )
+
+    def paras_get_num_kv_slots(self):
+        # ParaS: Get the number of kv slots in each layer.
+        return self.size
 
 
 class HybridLinearKVPool(KVCache):
