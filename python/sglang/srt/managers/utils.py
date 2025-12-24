@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Optional, Union
 
 import torch
-
+import zmq
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers.overlap_utils import FutureIndices
 from sglang.srt.managers.schedule_batch import Req
 from sglang.srt.model_executor.forward_batch_info import PPProxyTensors
+from sglang.srt.managers.io_struct import BaseReq, BaseBatchReq
 
 if TYPE_CHECKING:
     from sglang.srt.managers.scheduler import GenerationBatchResult
@@ -172,3 +173,25 @@ def get_logprob_from_pp_outputs(
     ]
 
     return logits_output, extend_input_len_per_req, extend_logprob_start_len_per_req
+
+class SenderWrapper:
+    def __init__(self, socket: zmq.Socket):
+        self.socket = socket
+
+    def send_output(
+        self,
+        output: Union[BaseReq, BaseBatchReq],
+        recv_obj: Optional[Union[BaseReq, BaseBatchReq]] = None,
+    ):
+        if self.socket is None:
+            return
+
+        if (
+            isinstance(recv_obj, BaseReq)
+            and recv_obj.http_worker_ipc is not None
+            and output.http_worker_ipc is None
+        ):
+            # handle communicator reqs for multi-http worker case
+            output.http_worker_ipc = recv_obj.http_worker_ipc
+
+        self.socket.send_pyobj(output)

@@ -475,3 +475,6 @@ class TpModelWorker(BaseTpWorker):
     @paras_func
     def paras_configure_ep(self):
         self.model_runner.paras_configure_ep()
+        
+    def get_paras_tp_group(self):
+        return self.model_runner.paras_tp_group

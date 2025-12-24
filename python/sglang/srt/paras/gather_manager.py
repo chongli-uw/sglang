@@ -3,7 +3,6 @@ import torch
 import pickle
 import numpy as np
 import torch.distributed as dist
-from torch.nn.utils.rnn import pad_sequence
 
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache
@@ -14,9 +13,9 @@ from sglang.srt.managers.schedule_batch import (
 from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 from sglang.srt.mem_cache.memory_pool import (
     ReqToTokenPool, 
-    TokenToKVPoolAllocator, 
     MHATokenToKVPool,
 )
+from sglang.srt.mem_cache.allocator import TokenToKVPoolAllocator
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.distributed.parallel_state import GroupCoordinator
 from sglang.srt.paras.utils import print_class_tensor_member, profile_object_members

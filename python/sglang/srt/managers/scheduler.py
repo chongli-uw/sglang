@@ -197,6 +197,7 @@ from sglang.srt.utils.hf_transformers_utils import (
 )
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
+from sglang.srt.managers.utils import SenderWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +211,6 @@ GRAMMAR_TIMEOUT = float(os.environ.get("SGLANG_GRAMMAR_TIMEOUT", 300))
 @dataclass
 class EmbeddingBatchResult:
     embeddings: torch.Tensor
-
 
 class Scheduler(
     SchedulerOutputProcessorMixin,
@@ -580,28 +580,6 @@ class Scheduler(
     def init_sockets(self, server_args: ServerArgs, port_args: PortArgs):
         context = zmq.Context(2)
         self.idle_sleeper = None
-
-        class SenderWrapper:
-            def __init__(self, socket: zmq.Socket):
-                self.socket = socket
-
-            def send_output(
-                self,
-                output: Union[BaseReq, BaseBatchReq],
-                recv_obj: Optional[Union[BaseReq, BaseBatchReq]] = None,
-            ):
-                if self.socket is None:
-                    return
-
-                if (
-                    isinstance(recv_obj, BaseReq)
-                    and recv_obj.http_worker_ipc is not None
-                    and output.http_worker_ipc is None
-                ):
-                    # handle communicator reqs for multi-http worker case
-                    output.http_worker_ipc = recv_obj.http_worker_ipc
-
-                self.socket.send_pyobj(output)
 
         if self.pp_rank == 0 and self.attn_tp_rank == 0:
             self.recv_from_tokenizer = get_zmq_socket(
@@ -1133,6 +1111,8 @@ class Scheduler(
             ):
                 self.return_health_check_ct += 1
                 continue
+            
+            logger.info(f"Processing request: {recv_req}")
 
             output = self._request_dispatcher(recv_req)
             if output is not None:
@@ -1635,6 +1615,31 @@ class Scheduler(
             swa_available_size,
             swa_evictable_size,
         )
+        
+    def merge_last_batch(self):
+        # Chunked requests are not considered in parallelism switch
+        if self.last_batch and self.last_batch.forward_mode.is_extend():
+            if self.last_batch.chunked_req is not None:
+                # In the context pipeline parallelism, after the last chunk, the current microbatch still track outdated chunked_req.
+                # We need to discard it.
+                chunked_req_to_exclude.add(self.last_batch.chunked_req)
+
+            # Filter batch
+            last_bs = self.last_batch.batch_size()
+            self.last_batch.filter_batch(
+                chunked_req_to_exclude=list(chunked_req_to_exclude)
+            )
+            if self.last_batch.batch_size() < last_bs:
+                self.running_batch.batch_is_full = False
+
+            # Merge the new batch into the running batch.
+            # For prefill-only batch, we can avoid going through decoding step.
+            if not self.last_batch.is_empty() and not self.last_batch.is_prefill_only:
+                if self.running_batch.is_empty():
+                    self.running_batch = self.last_batch
+                else:
+                    # Merge running_batch with prefill batch
+                    self.running_batch.merge_batch(self.last_batch)
 
     def get_next_batch_to_run(self) -> Optional[ScheduleBatch]:
         # Merge the prefill batch into the running batch

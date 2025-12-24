@@ -305,7 +305,6 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
             layer_id=layer_id,
             hidden_size=config.hidden_size,
             intermediate_size=config.moe_intermediate_size,
-            renormalize=config.norm_topk_prob,
             quant_config=quant_config,
             prefix=add_prefix("experts", prefix),
             skip_weights_init=True,

@@ -53,6 +53,7 @@ from sglang.srt.utils import (
     is_flashinfer_available,
     is_hip,
     round_up,
+    set_weight_attrs,
 )
 
 if is_flashinfer_available():
@@ -964,6 +965,34 @@ class FusedMoE(torch.nn.Module):
             for expert_id in range(num_experts)
             for shard_id in ["w1", "w2", "w3"]
         ]
+        
+    def paras_drop_params(self, params_name):
+        assert params_name in [
+            "w13_weight",
+            "w2_weight",
+        ], f"Unsupported parameter name: {params_name}"
+        if params_name in self._parameters:
+            del self._parameters[params_name]
+    
+    def paras_load_params(self, params_data, params_name):
+        if params_name == "w13_weight":
+            w13_weight = torch.nn.Parameter(
+                params_data,
+                requires_grad=False,
+            )
+            if "w13_weight" in self._parameters:
+                del self._parameters["w13_weight"]
+            self.register_parameter("w13_weight", w13_weight)
+            set_weight_attrs(w13_weight, self.extra_weight_attrs)
+        elif params_name == "w2_weight":
+            w2_weight = torch.nn.Parameter(
+                params_data,
+                requires_grad=False,
+            )
+            if "w2_weight" in self._parameters:
+                del self._parameters["w2_weight"]
+            self.register_parameter("w2_weight", w2_weight)
+            set_weight_attrs(w2_weight, self.extra_weight_attrs)
 
 
 class FlashInferFusedMoE(FusedMoE):

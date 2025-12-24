@@ -261,9 +261,6 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
     ) -> CombineInput:
         from sglang.srt.layers.moe.token_dispatcher import StandardCombineInput
 
-        x = dispatch_output.hidden_states
-        topk_output = dispatch_output.topk_output
-
         moe_runner_config = self.moe_runner_config
 
         backend = self.runner.runner_backend
@@ -293,6 +290,9 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
             )
             return self.runner.run(dispatch_output, quant_info)
         else:
+            x = dispatch_output.hidden_states
+            topk_output = dispatch_output.topk_output
+
             if _use_aiter:
                 assert not moe_runner_config.no_combine, "unsupported"
                 topk_weights, topk_ids, _ = topk_output

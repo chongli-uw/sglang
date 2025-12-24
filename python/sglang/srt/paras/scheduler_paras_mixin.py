@@ -11,14 +11,15 @@ from sglang.srt.managers.schedule_batch import (
     ScheduleBatch,
 )
 from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
-from sglang.srt.managers.tp_worker import TpModelWorker
-from sglang.srt.mem_cache.memory_pool import ReqToTokenPool, MHATokenToKVPool, TokenToKVPoolAllocator
+from sglang.srt.mem_cache.memory_pool import ReqToTokenPool, MHATokenToKVPool
+from sglang.srt.mem_cache.allocator import TokenToKVPoolAllocator
 from sglang.srt.server_args import get_global_server_args
 
 from sglang.srt.paras.utils import paras_func, paras_profile_func
 from sglang.srt.paras.gather_manager import ParaSReqGatherManager
 from sglang.srt.layers.moe import utils as moe_utils
 from sglang.srt.layers.moe.utils import MoeA2ABackend
+from sglang.srt.managers.utils import SenderWrapper
 
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,6 @@ class SchedulerParasMixin:
     This class implements the parallel configuration logic for Scheduler.
     """
     
-    tp_worker: TpModelWorker
     req_to_token_pool: ReqToTokenPool
     token_to_kv_pool: MHATokenToKVPool
     token_to_kv_pool_allocator: TokenToKVPoolAllocator
@@ -57,6 +57,8 @@ class SchedulerParasMixin:
         self.paras_dp_rank = self.tp_rank // self.paras_tp_size
         self.paras_tp_group = self.tp_worker.get_paras_tp_group()
         self.paras_tp_cpu_group = self.paras_tp_group.cpu_group
+        self.paras_tp_attn_tp_group = self.paras_tp_group
+        self.paras_tp_attn_tp_cpu_group = self.paras_tp_group.cpu_group
 
         if self.paras_tp_rank == 0:
             self.tp_recv_from_tokenizer = self.recv_from_tokenizer
@@ -66,13 +68,15 @@ class SchedulerParasMixin:
         else:
             self.tp_recv_from_tokenizer = None
             self.tp_recv_from_rpc = None
-            self.tp_send_to_tokenizer = SimpleNamespace(send_pyobj=lambda x: None)
-            self.tp_send_to_detokenizer = SimpleNamespace(send_pyobj=lambda x: None)
+            self.tp_send_to_tokenizer = SenderWrapper(None)
+            self.tp_send_to_detokenizer = SenderWrapper(None)
 
         self.paras_ep_size = self.tp_size
         self.paras_ep_rank = self.tp_rank
         self.paras_ep_group = self.tp_group
         self.paras_ep_cpu_group = self.tp_cpu_group
+        self.paras_ep_attn_tp_group = self.tp_group
+        self.paras_ep_attn_tp_cpu_group = self.tp_cpu_group
 
         self.ep_recv_from_tokenizer = self.recv_from_tokenizer
         self.ep_recv_from_rpc = self.recv_from_rpc
@@ -125,7 +129,9 @@ class SchedulerParasMixin:
         self.paras_parallelism_config = "TP"
         self.server_args.enable_dp_attention = False
         self.server_args.moe_a2a_backend = MoeA2ABackend.NONE
-        get_global_server_args().enable_dp_attention = False
+        self.server_args.enable_dp_attention = False
+        self.server_args.dp_size = 1
+        self.server_args.ep_size = 1
         moe_utils.MOE_A2A_BACKEND = MoeA2ABackend.NONE
         
         self.tree_cache.reset()
@@ -172,6 +178,8 @@ class SchedulerParasMixin:
         # drop-in replacement for scheduler tp configs 
         self.tp_size = self.paras_tp_size
         self.tp_rank = self.paras_tp_rank
+        self.attn_tp_group = self.paras_tp_group
+        self.attn_tp_cpu_group = self.paras_tp_cpu_group
         self.tp_group = self.paras_tp_group
         self.tp_cpu_group = self.paras_tp_cpu_group
 
@@ -182,6 +190,8 @@ class SchedulerParasMixin:
             self.paras_tp_size,
             self.paras_dp_rank,
         )
+        self.attn_tp_group = self.paras_tp_attn_tp_group
+        self.attn_tp_cpu_group = self.paras_tp_attn_tp_cpu_group
 
         self.recv_from_tokenizer = self.tp_recv_from_tokenizer
         self.send_to_tokenizer = self.tp_send_to_tokenizer
@@ -198,7 +208,9 @@ class SchedulerParasMixin:
         self.paras_parallelism_config = "EP"
         self.server_args.enable_dp_attention = True
         self.server_args.moe_a2a_backend = MoeA2ABackend.DEEPEP
-        get_global_server_args().enable_dp_attention = True
+        self.server_args.enable_dp_attention = True
+        self.server_args.dp_size = self.paras_ep_size
+        self.server_args.ep_size = self.paras_ep_size
         moe_utils.MOE_A2A_BACKEND = MoeA2ABackend.DEEPEP
         
         self.tp_worker.paras_configure_ep()
@@ -208,7 +220,6 @@ class SchedulerParasMixin:
         self.tp_rank = self.paras_ep_rank
         self.tp_group = self.paras_ep_group
         self.tp_cpu_group = self.paras_ep_cpu_group
-
         # equals to:
         # self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = 0, 1, self.tp_rank
         self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
@@ -219,6 +230,8 @@ class SchedulerParasMixin:
                 self.dp_size,
             )
         )
+        self.attn_tp_group = self.paras_ep_attn_tp_group
+        self.attn_tp_cpu_group = self.paras_ep_attn_tp_cpu_group
 
         self.recv_from_tokenizer = self.ep_recv_from_tokenizer
         self.send_to_tokenizer = self.ep_send_to_tokenizer
