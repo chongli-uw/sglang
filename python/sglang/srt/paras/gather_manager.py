@@ -22,6 +22,7 @@ from sglang.srt.paras.utils import print_class_tensor_member, profile_object_mem
 from sglang.srt.paras.ops import gather_kv_and_permute, permute_and_scatter_kv
 
 def prune_request(req: Req):
+    req.last_host_node = None
     req.last_node = None
     req.prefix_indices = None
     req.tokenizer = None
@@ -31,6 +32,7 @@ def recover_request(
     tree_cache: BasePrefixCache,
     tokenizer: Any,
 ):
+    req.last_host_node = tree_cache.root_node
     req.last_node = tree_cache.root_node
     req.prefix_indices = []
     req.tokenizer = tokenizer
@@ -46,7 +48,7 @@ def paras_tp_group_all_gather_reqs(
     # Clean up tensor members to avoid pickle triggering torch device copy, mostly radix cache related stuff
     for req in reqs:
         prune_request(req)
-        # print_class_tensor_member(req)
+        print_class_tensor_member(req)
         # profile_object_members(req)
         
     serialized_data = pickle.dumps(reqs)
@@ -284,6 +286,8 @@ class ParaSReqGatherManager:
         batch.output_ids = torch.tensor(last_token_list, dtype=torch.int64, device=device)
         batch.req_pool_indices = torch.tensor(req_pool_indices_list, dtype=torch.int64, device=device)
         batch.seq_lens = torch.tensor(seq_lens_list, dtype=torch.int64, device=device)
+        batch.seq_lens_cpu = torch.tensor(seq_lens_list, dtype=torch.int64, device="cpu")
+        batch.orig_seq_lens = batch.seq_lens.clone()
         batch.seq_lens_sum = sum(seq_lens_list)
         
         # Create sampling_info before prepare_for_decode (it's required by prepare_for_decode)
@@ -333,6 +337,8 @@ class ParaSReqGatherManager:
         running_batch.input_ids = torch.tensor(input_ids_list, dtype=torch.int64, device=device)
         running_batch.req_pool_indices = torch.tensor(req_pool_indices_list, dtype=torch.int64, device=device)
         running_batch.seq_lens = torch.tensor(seq_lens_list, dtype=torch.int64, device=device)
+        running_batch.seq_lens_cpu = torch.tensor(seq_lens_list, dtype=torch.int64, device="cpu")
+        running_batch.orig_seq_lens = running_batch.seq_lens.clone()
         running_batch.seq_lens_sum = sum(seq_lens_list)
         
         # Set output_ids to input_ids (will be used by prepare_for_decode)

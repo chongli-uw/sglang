@@ -74,10 +74,10 @@ _is_cpu = is_cpu()
 logger = logging.getLogger(__name__)
 
 
-def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig, force_standard_dispatcher: bool = False) -> BaseDispatcher:
+def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig, paras_force_standard_dispatcher: bool = False) -> BaseDispatcher:
     a2a_backend = get_moe_a2a_backend()
-    if a2a_backend.is_none() or force_standard_dispatcher:
-        return StandardDispatcher(moe_runner_config)
+    if a2a_backend.is_none() or paras_force_standard_dispatcher:
+        return StandardDispatcher(moe_runner_config, paras_force_no_ep=paras_force_standard_dispatcher)
     elif a2a_backend.is_deepep() or a2a_backend.is_mooncake():
         return MaybeTboDeepEPDispatcher(
             group=get_tp_group().device_group,
@@ -150,7 +150,7 @@ class FusedMoE(torch.nn.Module):
         moe_tp_size_override: Optional[int] = None,
         moe_ep_rank_override: Optional[int] = None,
         moe_tp_rank_override: Optional[int] = None,
-        force_standard_dispatcher: bool = False,
+        paras_force_standard_dispatcher: bool = False,
     ):
         super().__init__()
         if params_dtype is None:
@@ -237,7 +237,7 @@ class FusedMoE(torch.nn.Module):
         )
 
         self.quant_method.create_moe_runner(self, self.moe_runner_config)
-        self.dispatcher = create_moe_dispatcher(self.moe_runner_config, force_standard_dispatcher)
+        self.dispatcher = create_moe_dispatcher(self.moe_runner_config, paras_force_standard_dispatcher)
 
         self.should_fuse_routed_scaling_factor_in_topk = isinstance(
             self.quant_method, ModelOptNvFp4FusedMoEMethod

@@ -52,20 +52,23 @@ assert isinstance(StandardCombineInput, CombineInput)
 
 class StandardDispatcher(BaseDispatcher):
 
-    def __init__(self, moe_runner_config: MoeRunnerConfig):
-        self.moe_ep_size = get_moe_expert_parallel_world_size()
+    def __init__(self, moe_runner_config: MoeRunnerConfig, paras_force_no_ep: bool = False):
         self.enable_flashinfer_cutlass_moe = (
             get_moe_runner_backend().is_flashinfer_cutlass()
         )
         self.num_experts = moe_runner_config.num_experts
         self.num_local_experts = moe_runner_config.num_local_experts
-        self.moe_ep_rank = get_moe_expert_parallel_rank()
+        if paras_force_no_ep:
+            self.moe_ep_size = 1
+            self.moe_ep_rank = 0
+        else:
+            self.moe_ep_size = get_moe_expert_parallel_world_size()
+            self.moe_ep_rank = get_moe_expert_parallel_rank()
         self.local_expert_mapping = None
 
     def dispatch(
         self, hidden_states: torch.Tensor, topk_output: TopKOutput
     ) -> DispatchOutput:
-
         if (
             self.moe_ep_size > 1
             and not self.enable_flashinfer_cutlass_moe

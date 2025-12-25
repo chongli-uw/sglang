@@ -1617,6 +1617,7 @@ class Scheduler(
         )
         
     def merge_last_batch(self):
+        chunked_req_to_exclude = set()
         # Chunked requests are not considered in parallelism switch
         if self.last_batch and self.last_batch.forward_mode.is_extend():
             if self.last_batch.chunked_req is not None:

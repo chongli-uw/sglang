@@ -312,7 +312,7 @@ class Qwen3MoeSparseMoeBlockParaS(Qwen3MoeSparseMoeBlock):
             moe_ep_rank_override=0,
             moe_tp_size_override=get_paras_tp_size(),
             moe_tp_rank_override=get_paras_tp_rank(),
-            force_standard_dispatcher=True,
+            paras_force_standard_dispatcher=True,
         )
 
         self.parallelism_config = "ep"
