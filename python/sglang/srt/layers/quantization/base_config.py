@@ -108,7 +108,18 @@ class FusedMoEMethodBase(QuantizeMethodBase):
         dispatch_output: DispatchOutput,
     ) -> CombineInput:
         raise NotImplementedError
-
+    
+    def paras_set_extra_weight_attrs(
+        self,
+        layer: torch.nn.Module,
+        num_experts: int,
+        hidden_size: int,
+        intermediate_size_per_partition: int,
+        params_dtype: torch.dtype,
+        with_bias: bool = False,
+        **extra_weight_attrs,
+    ):
+        layer.extra_weight_attrs = extra_weight_attrs
 
 class QuantizationConfig(ABC):
     """Base class for quantization configs."""

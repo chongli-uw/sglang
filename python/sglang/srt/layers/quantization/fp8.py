@@ -725,6 +725,9 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             layer.w2_input_scale = None
 
     def process_weights_after_loading(self, layer: Module) -> None:
+        if layer.skip_weights_init:
+            return
+        
         if _is_hip and _use_hip_int4:
             self.process_weights_hip_int4(layer)
             return

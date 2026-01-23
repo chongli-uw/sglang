@@ -218,6 +218,7 @@ class FusedMoE(torch.nn.Module):
         if self.quant_method is None:
             self.quant_method = UnquantizedFusedMoEMethod(self.use_triton_kernels, use_deep_gemm=(self.moe_ep_size > 1))
 
+        self.skip_weights_init = skip_weights_init
         weights_init_func = self.quant_method.create_weights if not skip_weights_init else self.quant_method.paras_set_extra_weight_attrs
 
         weights_init_func(
