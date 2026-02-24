@@ -229,7 +229,6 @@ class TritonRunnerCore(MoeRunnerCore):
         )
 
         if no_combine:
-            assert not inplace
             out_hidden_states = torch.empty(
                 (M, topk_ids.shape[1], w2.shape[1]),
                 device=hidden_states.device,
@@ -447,4 +446,167 @@ def post_permute_triton_to_standard(
 
     return StandardCombineInput(
         hidden_states=runner_output.hidden_states,
+    )
+
+@register_pre_permute("deepep_normal", "triton")
+def pre_permute_deepep_normal_to_triton(
+    dispatch_output: DeepEPNormalDispatchOutput,
+    quant_info: TritonMoeQuantInfo,
+    runner_config: MoeRunnerConfig,
+    running_state: dict,
+) -> TritonRunnerInput:
+
+    from sglang.srt.layers.moe.ep_moe.kernels import ep_scatter
+    from sglang.srt.layers.moe.fused_moe_triton.fused_moe import (
+        get_config_dtype_str,
+        moe_align_block_size,
+        try_get_optimal_moe_config,
+    )
+
+    (
+        hidden_states,
+        hidden_states_scale,
+        topk_ids,
+        topk_weights,
+        num_recv_tokens_per_expert,
+    ) = dispatch_output
+
+    if hidden_states_scale is not None:
+        group_size = 128
+        num_tokens, hidden_size = hidden_states.shape
+        scale = hidden_states_scale.to(torch.float32)
+        hidden_states = (
+            hidden_states.to(torch.bfloat16)
+            .reshape(num_tokens, -1, group_size)
+            .mul_(scale.reshape(num_tokens, -1, 1))
+            .reshape(num_tokens, hidden_size)
+        )
+
+    num_local_experts = runner_config.num_local_experts
+    K = hidden_states.shape[1]
+
+    running_state["topk_ids"] = topk_ids
+    running_state["topk_weights"] = topk_weights
+    running_state["hidden_states_shape"] = hidden_states.shape
+    running_state["hidden_states_device"] = hidden_states.device
+
+    # --- ep_scatter: rearrange into expert-contiguous layout ---
+    all_tokens = sum(num_recv_tokens_per_expert)
+
+    input_tensor = torch.empty(
+        (all_tokens, K), device=hidden_states.device, dtype=hidden_states.dtype
+    )
+    input_tensor_scale = torch.empty(
+        (all_tokens, K // 128), device=hidden_states.device, dtype=torch.float32
+    )
+    m_indices = torch.empty(all_tokens, device=hidden_states.device, dtype=torch.int32)
+    output_index = torch.empty_like(topk_ids)
+
+    num_recv_tokens_per_expert_gpu = torch.tensor(
+        num_recv_tokens_per_expert,
+        dtype=torch.int32,
+        pin_memory=True,
+        device="cpu",
+    ).cuda(non_blocking=True)
+    expert_start_loc = torch.empty_like(num_recv_tokens_per_expert_gpu)
+
+    dummy_recv_scale = torch.ones_like(input_tensor_scale[: hidden_states.shape[0]])
+
+    ep_scatter(
+        hidden_states,
+        dummy_recv_scale,
+        topk_ids,
+        num_recv_tokens_per_expert_gpu,
+        expert_start_loc,
+        input_tensor,
+        input_tensor_scale,
+        m_indices,
+        output_index,
+    )
+
+    running_state["output_index"] = output_index
+
+    # Each scattered token maps to exactly one expert (top_k=1).
+    new_topk_ids = m_indices.unsqueeze(1).to(topk_ids.dtype)
+    new_topk_weights = torch.ones(
+        (all_tokens, 1), device=topk_weights.device, dtype=topk_weights.dtype
+    )
+
+    # --- Prepare triton kernel config ---
+    if (
+        not (quant_info.use_fp8_w8a8 or quant_info.use_int8_w8a8)
+        or quant_info.block_shape is not None
+        or _use_aiter
+    ):
+        padding_size = 0
+    else:
+        padding_size = _MOE_PADDING_SIZE
+
+    config_dtype = get_config_dtype_str(
+        use_fp8_w8a8=quant_info.use_fp8_w8a8,
+        use_int8_w8a8=quant_info.use_int8_w8a8,
+        use_int8_w8a16=quant_info.use_int8_w8a16,
+        use_int4_w4a16=quant_info.use_int4_w4a16,
+        dtype=input_tensor.dtype,
+    )
+
+    get_config_func = functools.partial(
+        try_get_optimal_moe_config,
+        quant_info.w13_weight.shape,
+        (
+            num_local_experts,
+            quant_info.w2_weight.shape[1],
+            quant_info.w2_weight.shape[2] - padding_size,
+        ),
+        new_topk_ids.shape[1],
+        config_dtype,
+        block_shape=quant_info.block_shape,
+    )
+
+    config = get_config_func(all_tokens)
+
+    sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(
+        new_topk_ids, config["BLOCK_SIZE_M"], num_local_experts
+    )
+
+    running_state["config"] = config
+
+    return TritonRunnerInput(
+        hidden_states=input_tensor,
+        topk_weights=new_topk_weights,
+        topk_ids=new_topk_ids,
+        sorted_token_ids=sorted_token_ids,
+        expert_ids=expert_ids,
+        num_tokens_post_padded=num_tokens_post_padded,
+    )
+
+
+@register_post_permute("triton", "deepep_normal")
+def post_permute_triton_to_deepep_normal(
+    runner_output: TritonRunnerOutput,
+    quant_info: TritonMoeQuantInfo,
+    runner_config: MoeRunnerConfig,
+    running_state: dict,
+) -> DeepEPNormalCombineInput:
+
+    from sglang.srt.layers.moe.ep_moe.kernels import ep_gather
+    from sglang.srt.layers.moe.token_dispatcher.deepep import DeepEPNormalCombineInput
+
+    gather_out = torch.empty(
+        running_state["hidden_states_shape"],
+        device=running_state["hidden_states_device"],
+        dtype=torch.bfloat16,
+    )
+    ep_gather(
+        runner_output.hidden_states.squeeze(1),
+        running_state["topk_ids"],
+        running_state["topk_weights"],
+        running_state["output_index"],
+        gather_out,
+    )
+
+    return DeepEPNormalCombineInput(
+        hidden_states=gather_out,
+        topk_ids=running_state["topk_ids"],
+        topk_weights=running_state["topk_weights"],
     )

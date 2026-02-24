@@ -220,6 +220,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
     def create_moe_runner(
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
     ):
+        
         self.moe_runner_config = moe_runner_config
         if self.use_deep_gemm:
             backend = MoeRunnerBackend.DEEP_GEMM
@@ -229,6 +230,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
                 if self.use_triton_kernels
                 else MoeRunnerBackend.TRITON
             )
+            
         self.runner = MoeRunner(backend, moe_runner_config)
 
     def apply(
