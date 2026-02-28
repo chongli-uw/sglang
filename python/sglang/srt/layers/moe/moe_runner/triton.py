@@ -155,6 +155,22 @@ class TritonRunnerCore(MoeRunnerCore):
 
         M = hidden_states.shape[0]
         E, N, _ = w13.shape
+
+        if M == 0:
+            if no_combine:
+                empty_out = torch.empty(
+                    (0, topk_ids.shape[1], w2.shape[1]),
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+            else:
+                empty_out = torch.empty(
+                    (0, w2.shape[1]),
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+            return TritonRunnerOutput(hidden_states=empty_out)
+
         compute_type = (
             tl.bfloat16 if hidden_states.dtype == torch.bfloat16 else tl.float16
         )

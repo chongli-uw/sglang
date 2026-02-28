@@ -612,6 +612,9 @@ def invoke_fused_moe_kernel(
     c_sorted: bool = False,
     filter_expert: bool = True,
 ) -> None:
+    if sorted_token_ids.numel() == 0:
+        return
+
     assert topk_weights.stride(1) == 1
     assert sorted_token_ids.stride(0) == 1
 
@@ -851,6 +854,9 @@ def moe_sum_reduce_triton(
 
     token_num, topk_num, hidden_dim = input.shape
     assert output.shape[0] == token_num and output.shape[1] == hidden_dim
+
+    if token_num == 0:
+        return
 
     BLOCK_M = 1
     BLOCK_DIM = 2048
